@@ -17,11 +17,6 @@
 
 ---
 
-## Resolved (2026-03-31)
-
-- Content-Length DoS — 10 MiB limit added to transport
-- Panic on user input — `expect()` replaced with proper error returns
-
 ## Positive Findings
 
 - No shell command execution
