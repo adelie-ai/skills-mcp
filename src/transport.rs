@@ -159,12 +159,21 @@ impl StdioTransportHandler {
     }
 
     async fn read_message_content_length_with_first_line(&mut self, first: &str) -> Result<String> {
+        const MAX_CONTENT_LENGTH: usize = 10 * 1024 * 1024; // 10 MiB
+
         let content_length = parse_content_length_header(first).ok_or_else(|| {
             TransportError::InvalidMessage(format!(
                 "Expected Content-Length header, got: {}",
                 first
             ))
         })?;
+
+        if content_length > MAX_CONTENT_LENGTH {
+            return Err(TransportError::InvalidMessage(format!(
+                "Content-Length {content_length} exceeds maximum ({MAX_CONTENT_LENGTH})"
+            ))
+            .into());
+        }
 
         // Drain remaining headers until blank line.
         loop {

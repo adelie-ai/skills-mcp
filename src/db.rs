@@ -196,7 +196,10 @@ impl SkillDb {
             return Err(SkillsError::AlreadyExists(new_name.clone()).into());
         }
 
-        let skill = self.skills.get_mut(&id).expect("skill must exist");
+        let skill = self
+            .skills
+            .get_mut(&id)
+            .ok_or_else(|| SkillsError::NotFound(id.clone()))?;
         if let Some(name) = req.name {
             skill.name = name;
         }
@@ -229,7 +232,10 @@ impl SkillDb {
     /// Delete a skill by ID or name. Returns the deleted skill.
     pub fn delete(&mut self, id_or_name: &str) -> Result<Skill> {
         let id = self.get(id_or_name)?.id;
-        let removed = self.skills.remove(&id).expect("skill must exist");
+        let removed = self
+            .skills
+            .remove(&id)
+            .ok_or_else(|| SkillsError::NotFound(id.clone()))?;
         self.save()?;
         Ok(removed)
     }
