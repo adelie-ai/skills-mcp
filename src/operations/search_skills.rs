@@ -1,28 +1,16 @@
 #![deny(warnings)]
 
-// Search skills by query string
-
-use crate::db::{SkillDb, SkillKind};
 use crate::error::{McpError, Result};
+use crate::params::SearchSkillsParams;
+use crate::repo;
 use serde_json::Value;
-use std::str::FromStr;
 
-/// Parse arguments and search skills in the database.
-pub fn execute(args: &Value, db: &SkillDb) -> Result<Value> {
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::InvalidToolParameters("Missing required parameter: query".to_string()))?;
-
-    let kind: Option<SkillKind> = args
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .map(SkillKind::from_str)
-        .transpose()?;
-
-    let skills = db.search(query, kind.as_ref());
-    let text = serde_json::to_string_pretty(&skills)?;
+pub fn execute(args: &Value) -> Result<Value> {
+    let params: SearchSkillsParams = serde_json::from_value(args.clone())
+        .map_err(|e| McpError::InvalidToolParameters(e.to_string()))?;
+    let tags = params.tags.unwrap_or_default();
+    let results = repo::search(&params.query, &tags);
     Ok(serde_json::json!({
-        "content": [{"type": "text", "text": text}]
+        "content": [{"type": "text", "text": serde_json::to_string_pretty(&results)?}],
     }))
 }

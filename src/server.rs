@@ -5,7 +5,6 @@
 use crate::error::{McpError, Result};
 use crate::tools::ToolRegistry;
 use serde_json::Value;
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -16,10 +15,10 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    /// Create a new MCP server backed by the database at `db_path`.
-    pub fn new(db_path: &Path) -> Result<Self> {
+    /// Create a new MCP server.
+    pub fn new() -> Result<Self> {
         Ok(Self {
-            tool_registry: Arc::new(ToolRegistry::new(db_path)?),
+            tool_registry: Arc::new(ToolRegistry::new()),
             initialized: Arc::new(RwLock::new(false)),
         })
     }

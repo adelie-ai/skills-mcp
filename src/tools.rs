@@ -1,8 +1,12 @@
 #![deny(warnings)]
 
-// Tool registry: MCP tool definitions and dispatch
+// Tool registry: MCP tool definitions and dispatch.
+//
+// Backing storage is the on-disk Anthropic Agent Skills format (one
+// SKILL.md per skill directory). See `crate::repo` for the layout. There
+// is no shared in-memory state — every operation reads from / writes to
+// disk directly — so the registry is stateless.
 
-use crate::db::SkillDb;
 use crate::error::{McpError, Result};
 use crate::params::{
     CreateSkillParams, DeleteSkillParams, GetSkillParams, ListSkillsParams, SearchSkillsParams,
@@ -10,22 +14,13 @@ use crate::params::{
 };
 use schemars::{JsonSchema, schema_for};
 use serde_json::Value;
-use std::path::Path;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
-/// Holds all tool definitions and the shared database.
-pub struct ToolRegistry {
-    db: Arc<Mutex<SkillDb>>,
-}
+#[derive(Default)]
+pub struct ToolRegistry;
 
 impl ToolRegistry {
-    /// Create a new registry backed by the database at `db_path`.
-    pub fn new(db_path: &Path) -> Result<Self> {
-        let db = SkillDb::open(db_path)?;
-        Ok(Self {
-            db: Arc::new(Mutex::new(db)),
-        })
+    pub fn new() -> Self {
+        Self
     }
 
     /// Return all tool definitions in MCP JSON schema format.
@@ -33,27 +28,27 @@ impl ToolRegistry {
         serde_json::json!([
             tool_def::<CreateSkillParams>(
                 "skills_create_skill",
-                "Create a new skill entry. A skill is either a reusable code snippet (kind=code) or a natural-language how-to guide for an LLM agent (kind=howto). Returns the created skill as JSON including its assigned id."
+                "Create a new skill on disk as <root>/<name>/SKILL.md with YAML frontmatter (name, description, optional tags) plus a markdown body. Writes to ~/.agents/skills, creating it if missing."
             ),
             tool_def::<GetSkillParams>(
                 "skills_get_skill",
-                "Retrieve a single skill by its UUID id or by its unique name. Returns the full skill object as JSON."
+                "Read a skill by name. Searches all configured roots (~/.agents/skills, ~/.claude/skills, and any in $SKILLS_MCP_ROOTS) and returns the parsed frontmatter, body, absolute path, and a list of attachment filenames in the skill directory."
             ),
             tool_def::<UpdateSkillParams>(
                 "skills_update_skill",
-                "Update one or more fields of an existing skill. Only the fields you provide are changed; omitted fields are left unchanged. Pass null for 'language' or 'description' to clear those fields. Returns the updated skill as JSON."
+                "Modify an existing skill in place. Only the fields you set are changed. If `new_name` is provided the skill directory is renamed."
             ),
             tool_def::<DeleteSkillParams>(
                 "skills_delete_skill",
-                "Permanently delete a skill by its UUID id or exact name. Returns a confirmation message."
+                "Permanently delete a skill directory (SKILL.md and any attachments) by name."
             ),
             tool_def::<ListSkillsParams>(
                 "skills_list_skills",
-                "List all skills in the knowledge base, optionally filtered by kind and/or tags. Returns a JSON array of skill objects sorted by creation time."
+                "List every skill across all configured roots. Returns name, description, tags, path, root, and attachment filenames for each. Optionally filter by tag."
             ),
             tool_def::<SearchSkillsParams>(
                 "skills_search_skills",
-                "Full-text search across all skills. Matches (case-insensitive) against name, description, content, tags, and language. Returns a JSON array of matching skill objects sorted by creation time."
+                "Case-insensitive full-text search across skill names, descriptions, tags, and SKILL.md bodies. Optionally restrict to skills carrying at least one of the supplied tags."
             ),
         ])
     }
@@ -61,48 +56,15 @@ impl ToolRegistry {
     /// Dispatch a tool call to the appropriate operation.
     pub async fn execute_tool(&self, name: &str, args: &Value) -> Result<Value> {
         match name {
-            "skills_create_skill" => {
-                let mut db = self.db.lock().await;
-                crate::operations::create_skill::execute(args, &mut db)
-            }
-            "skills_get_skill" => {
-                let db = self.db.lock().await;
-                crate::operations::get_skill::execute(args, &db)
-            }
-            "skills_update_skill" => {
-                let mut db = self.db.lock().await;
-                crate::operations::update_skill::execute(args, &mut db)
-            }
-            "skills_delete_skill" => {
-                let mut db = self.db.lock().await;
-                crate::operations::delete_skill::execute(args, &mut db)
-            }
-            "skills_list_skills" => {
-                let db = self.db.lock().await;
-                crate::operations::list_skills::execute(args, &db)
-            }
-            "skills_search_skills" => {
-                let db = self.db.lock().await;
-                crate::operations::search_skills::execute(args, &db)
-            }
+            "skills_create_skill" => crate::operations::create_skill::execute(args),
+            "skills_get_skill" => crate::operations::get_skill::execute(args),
+            "skills_update_skill" => crate::operations::update_skill::execute(args),
+            "skills_delete_skill" => crate::operations::delete_skill::execute(args),
+            "skills_list_skills" => crate::operations::list_skills::execute(args),
+            "skills_search_skills" => crate::operations::search_skills::execute(args),
             _ => Err(McpError::ToolNotFound(name.to_string()).into()),
         }
     }
-}
-
-impl Default for ToolRegistry {
-    fn default() -> Self {
-        // Default to the standard db path
-        let path = default_db_path();
-        Self::new(&path).expect("Failed to open default skills db")
-    }
-}
-
-/// Returns the default database file path: `~/.skills-mcp/skills.json`.
-pub fn default_db_path() -> std::path::PathBuf {
-    shellexpand::full("~/.skills-mcp/skills.json")
-        .map(|s| std::path::PathBuf::from(s.as_ref()))
-        .unwrap_or_else(|_| std::path::PathBuf::from(".skills-mcp/skills.json"))
 }
 
 /// Build an MCP tool definition from a params type's derived JSON schema.

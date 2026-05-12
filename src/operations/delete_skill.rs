@@ -1,24 +1,18 @@
 #![deny(warnings)]
 
-// Delete a skill by ID or name
-
-use crate::db::SkillDb;
 use crate::error::{McpError, Result};
+use crate::params::DeleteSkillParams;
+use crate::repo;
 use serde_json::Value;
 
-/// Parse arguments and delete a skill from the database.
-pub fn execute(args: &Value, db: &mut SkillDb) -> Result<Value> {
-    let id_or_name = args
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::InvalidToolParameters("Missing required parameter: id".to_string()))?;
-
-    let deleted = db.delete(id_or_name)?;
-    let text = format!(
-        "Deleted skill '{}' (id: {})",
-        deleted.name, deleted.id
-    );
+pub fn execute(args: &Value) -> Result<Value> {
+    let params: DeleteSkillParams = serde_json::from_value(args.clone())
+        .map_err(|e| McpError::InvalidToolParameters(e.to_string()))?;
+    let deleted = repo::delete(&params.name)?;
     Ok(serde_json::json!({
-        "content": [{"type": "text", "text": text}]
+        "content": [{
+            "type": "text",
+            "text": format!("Deleted skill '{}' from {}", deleted.name, deleted.root),
+        }],
     }))
 }

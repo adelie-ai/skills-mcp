@@ -11,11 +11,9 @@ use axum::{
 use clap::{Parser, ValueEnum};
 use skills_mcp::error::Result;
 use skills_mcp::server::McpServer;
-use skills_mcp::tools::default_db_path;
 use skills_mcp::transport::StdioTransportHandler;
 use serde_json::Value;
 use std::fmt;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
@@ -61,9 +59,6 @@ enum Commands {
         /// Host for WebSocket mode (ignored for stdio)
         #[arg(long, default_value = "0.0.0.0")]
         host: String,
-        /// Path to the skills JSON database file
-        #[arg(long, env = "SKILLS_MCP_DB_PATH")]
-        db_path: Option<PathBuf>,
     },
 }
 
@@ -72,9 +67,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve { mode, port, host, db_path } => {
-            let db_path = db_path.unwrap_or_else(default_db_path);
-            let server = McpServer::new(&db_path)?;
+        Commands::Serve { mode, port, host } => {
+            let server = McpServer::new()?;
 
             match mode {
                 TransportMode::Stdio => run_stdio_server(server).await?,

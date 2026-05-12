@@ -1,0 +1,541 @@
+#![deny(warnings)]
+
+// On-disk skill repository following the Anthropic Agent Skills format:
+//
+//   <root>/<name>/SKILL.md
+//
+// SKILL.md begins with a YAML frontmatter block delimited by `---` lines:
+//
+//   ---
+//   name: my-skill
+//   description: One-line trigger description for the agent.
+//   tags: [optional, tag, list]
+//   ---
+//   <markdown body>
+//
+// Any other files in the skill directory are reported as `attachments` so
+// downstream consumers (e.g. Adelie's knowledge-base ingester) can find
+// supporting scripts/assets.
+
+use crate::error::{Result, SkillsError};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// File name used by every skill directory.
+pub const SKILL_FILE: &str = "SKILL.md";
+
+/// Environment variable used to add extra skill roots (colon-separated).
+pub const ROOTS_ENV: &str = "SKILLS_MCP_ROOTS";
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SkillFrontmatter {
+    /// Stable identifier for the skill. Must match the directory name.
+    pub name: String,
+    /// Short description (1-2 sentences) telling the agent when to use this skill.
+    pub description: String,
+    /// Optional tags for filtering and discovery.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct SkillSummary {
+    pub name: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    /// Absolute path to SKILL.md.
+    pub path: String,
+    /// Absolute path to the root that contains this skill.
+    pub root: String,
+    /// Names of additional files in the skill directory (relative to the directory).
+    pub attachments: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct SkillDetail {
+    pub name: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    /// Markdown body of SKILL.md (everything after the frontmatter block).
+    pub content: String,
+    pub path: String,
+    pub root: String,
+    pub attachments: Vec<String>,
+}
+
+/// Discover skill roots in lookup order. Only existing directories are
+/// returned. Order: `$SKILLS_MCP_ROOTS` entries (left to right), then
+/// `~/.agents/skills`, then `~/.claude/skills`.
+pub fn lookup_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(env) = std::env::var(ROOTS_ENV) {
+        for part in env.split(':').filter(|p| !p.is_empty()) {
+            let expanded = shellexpand::full(part)
+                .map(|s| PathBuf::from(s.as_ref()))
+                .unwrap_or_else(|_| PathBuf::from(part));
+            if expanded.is_dir() {
+                roots.push(expanded);
+            }
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        let candidates = [home.join(".agents/skills"), home.join(".claude/skills")];
+        for c in candidates {
+            if c.is_dir() && !roots.contains(&c) {
+                roots.push(c);
+            }
+        }
+    }
+    roots
+}
+
+/// Environment variable that overrides where `skills_create_skill` writes.
+pub const WRITE_ROOT_ENV: &str = "SKILLS_MCP_WRITE_ROOT";
+
+/// Default root used when creating new skills. Created on demand by `write`.
+/// `$SKILLS_MCP_WRITE_ROOT` overrides the default; useful when
+/// `~/.agents/skills` is owned by a package-management tool and not
+/// writable by the current user.
+pub fn default_write_root() -> PathBuf {
+    if let Ok(env) = std::env::var(WRITE_ROOT_ENV) {
+        return shellexpand::full(&env)
+            .map(|s| PathBuf::from(s.as_ref()))
+            .unwrap_or_else(|_| PathBuf::from(env));
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".agents/skills")
+}
+
+/// List every skill across every configured root. Skills with a malformed
+/// frontmatter are skipped with a warning instead of failing the whole list.
+pub fn list_all() -> Vec<SkillSummary> {
+    let mut out = Vec::new();
+    for root in lookup_roots() {
+        for entry in walkdir::WalkDir::new(&root)
+            .min_depth(2)
+            .max_depth(2)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if entry.file_name() != SKILL_FILE {
+                continue;
+            }
+            match read_summary(&entry.path().to_path_buf(), &root) {
+                Ok(s) => out.push(s),
+                Err(e) => {
+                    eprintln!(
+                        "skills-mcp: skipping {}: {}",
+                        entry.path().display(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Locate a skill by name across all configured roots. Returns the first match.
+pub fn find(name: &str) -> Option<(PathBuf, PathBuf)> {
+    let name = name.trim();
+    for root in lookup_roots() {
+        let dir = root.join(name);
+        let path = dir.join(SKILL_FILE);
+        if path.is_file() {
+            return Some((path, root));
+        }
+    }
+    None
+}
+
+/// Read a full skill (frontmatter + body + attachments) by name.
+pub fn read(name: &str) -> Result<SkillDetail> {
+    let (path, root) = find(name).ok_or_else(|| SkillsError::NotFound(name.to_string()))?;
+    let raw = fs::read_to_string(&path).map_err(|e| {
+        SkillsError::StorageError(format!("failed to read {}: {}", path.display(), e))
+    })?;
+    let (fm, body) = parse_skill_md(&raw)?;
+    Ok(SkillDetail {
+        name: fm.name,
+        description: fm.description,
+        tags: fm.tags,
+        content: body,
+        attachments: collect_attachments(&path),
+        path: path.display().to_string(),
+        root: root.display().to_string(),
+    })
+}
+
+/// Read just the frontmatter and attachment list (no body) for the listing view.
+fn read_summary(path: &Path, root: &Path) -> Result<SkillSummary> {
+    let raw = fs::read_to_string(path).map_err(|e| {
+        SkillsError::StorageError(format!("failed to read {}: {}", path.display(), e))
+    })?;
+    let (fm, _body) = parse_skill_md(&raw)?;
+    Ok(SkillSummary {
+        name: fm.name,
+        description: fm.description,
+        tags: fm.tags,
+        attachments: collect_attachments(path),
+        path: path.display().to_string(),
+        root: root.display().to_string(),
+    })
+}
+
+/// Write a new skill. Errors if a skill with the same name already exists
+/// in any configured root.
+pub fn write_new(name: &str, fm: &SkillFrontmatter, body: &str) -> Result<SkillDetail> {
+    if name.trim().is_empty() {
+        return Err(SkillsError::InvalidInput("name must not be empty".into()).into());
+    }
+    if fm.description.trim().is_empty() {
+        return Err(SkillsError::InvalidInput("description must not be empty".into()).into());
+    }
+    if find(name).is_some() {
+        return Err(SkillsError::AlreadyExists(name.to_string()).into());
+    }
+    let root = default_write_root();
+    fs::create_dir_all(&root).map_err(|e| {
+        SkillsError::StorageError(format!(
+            "failed to create write root {}: {} \
+             (override with $SKILLS_MCP_WRITE_ROOT if the default is read-only)",
+            root.display(),
+            e
+        ))
+    })?;
+    let dir = root.join(name);
+    fs::create_dir_all(&dir).map_err(|e| {
+        SkillsError::StorageError(format!(
+            "failed to create {}: {} \
+             (override with $SKILLS_MCP_WRITE_ROOT if the default is read-only)",
+            dir.display(),
+            e
+        ))
+    })?;
+    let path = dir.join(SKILL_FILE);
+    let serialised = render_skill_md(fm, body)?;
+    atomic_write(&path, &serialised)?;
+    Ok(SkillDetail {
+        name: fm.name.clone(),
+        description: fm.description.clone(),
+        tags: fm.tags.clone(),
+        content: body.to_string(),
+        attachments: collect_attachments(&path),
+        path: path.display().to_string(),
+        root: root.display().to_string(),
+    })
+}
+
+/// Overwrite an existing skill in place. Only fields set in `patch` are
+/// changed; the rest are read from disk.
+pub fn write_update(name: &str, patch: UpdatePatch) -> Result<SkillDetail> {
+    let current = read(name)?;
+    let new_name = patch.name.unwrap_or_else(|| current.name.clone());
+    if new_name != current.name && find(&new_name).is_some() {
+        return Err(SkillsError::AlreadyExists(new_name).into());
+    }
+    let fm = SkillFrontmatter {
+        name: new_name.clone(),
+        description: patch.description.unwrap_or(current.description),
+        tags: patch.tags.unwrap_or(current.tags),
+    };
+    let body = patch.content.unwrap_or(current.content);
+    let serialised = render_skill_md(&fm, &body)?;
+    let current_path = PathBuf::from(&current.path);
+    let current_dir = current_path.parent().expect("SKILL.md has a parent dir");
+
+    let final_dir = if new_name != current.name {
+        let root = PathBuf::from(&current.root);
+        let target_dir = root.join(&new_name);
+        fs::rename(current_dir, &target_dir).map_err(|e| {
+            SkillsError::StorageError(format!(
+                "failed to rename {} -> {}: {}",
+                current_dir.display(),
+                target_dir.display(),
+                e
+            ))
+        })?;
+        target_dir
+    } else {
+        current_dir.to_path_buf()
+    };
+    let path = final_dir.join(SKILL_FILE);
+    atomic_write(&path, &serialised)?;
+    Ok(SkillDetail {
+        name: fm.name,
+        description: fm.description,
+        tags: fm.tags,
+        content: body,
+        attachments: collect_attachments(&path),
+        path: path.display().to_string(),
+        root: current.root,
+    })
+}
+
+/// Patch shape for `write_update`. Each field is `Some(_)` only if the
+/// caller wants to change it.
+pub struct UpdatePatch {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub content: Option<String>,
+    pub tags: Option<Vec<String>>,
+}
+
+/// Delete a skill directory recursively. Returns the deleted skill's
+/// summary so the caller can confirm what was removed.
+pub fn delete(name: &str) -> Result<SkillSummary> {
+    let (path, root) = find(name).ok_or_else(|| SkillsError::NotFound(name.to_string()))?;
+    let summary = read_summary(&path, &root)?;
+    let dir = path.parent().expect("SKILL.md has a parent dir");
+    fs::remove_dir_all(dir).map_err(|e| {
+        SkillsError::StorageError(format!("failed to remove {}: {}", dir.display(), e))
+    })?;
+    Ok(summary)
+}
+
+/// Full-text search across name / description / tags / body.
+pub fn search(query: &str, required_tags: &[String]) -> Vec<SkillSummary> {
+    let needle = query.to_lowercase();
+    let mut out = Vec::new();
+    for s in list_all() {
+        if !required_tags.is_empty()
+            && !required_tags.iter().any(|t| s.tags.iter().any(|x| x == t))
+        {
+            continue;
+        }
+        if matches_summary(&s, &needle) {
+            out.push(s);
+        } else if let Ok(detail) = read(&s.name)
+            && detail.content.to_lowercase().contains(&needle)
+        {
+            out.push(s);
+        }
+    }
+    out
+}
+
+fn matches_summary(s: &SkillSummary, needle: &str) -> bool {
+    if s.name.to_lowercase().contains(needle) {
+        return true;
+    }
+    if s.description.to_lowercase().contains(needle) {
+        return true;
+    }
+    s.tags.iter().any(|t| t.to_lowercase().contains(needle))
+}
+
+fn collect_attachments(skill_md_path: &Path) -> Vec<String> {
+    let Some(dir) = skill_md_path.parent() else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = walkdir::WalkDir::new(dir)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path() != skill_md_path && e.file_type().is_file())
+        .filter_map(|e| {
+            e.path()
+                .strip_prefix(dir)
+                .ok()
+                .map(|p| p.display().to_string())
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Parse a SKILL.md file. Returns the parsed frontmatter and the body.
+///
+/// The frontmatter is the first YAML block delimited by `---` lines. The
+/// closing `---` must be the only content on its line. Files without a
+/// frontmatter block return an error.
+fn parse_skill_md(raw: &str) -> Result<(SkillFrontmatter, String)> {
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+    let trimmed = raw.trim_start();
+    let after_open = trimmed
+        .strip_prefix("---\n")
+        .or_else(|| trimmed.strip_prefix("---\r\n"))
+        .ok_or_else(|| {
+            SkillsError::InvalidInput(
+                "SKILL.md is missing a leading `---` frontmatter block".into(),
+            )
+        })?;
+    let close = find_close_fence(after_open).ok_or_else(|| {
+        SkillsError::InvalidInput("SKILL.md frontmatter is missing a closing `---`".into())
+    })?;
+    let (yaml, rest) = after_open.split_at(close);
+    let body = rest
+        .trim_start_matches("---\n")
+        .trim_start_matches("---\r\n")
+        .trim_start_matches("---")
+        .trim_start_matches('\n');
+    let fm: SkillFrontmatter = serde_yaml_ng::from_str(yaml)
+        .map_err(|e| SkillsError::InvalidInput(format!("invalid SKILL.md frontmatter: {e}")))?;
+    Ok((fm, body.to_string()))
+}
+
+/// Find the byte offset of the line that closes the frontmatter (a line
+/// containing only `---`). Returns the offset where that line starts.
+fn find_close_fence(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut line_start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' {
+            let line = &s[line_start..i];
+            let line = line.trim_end_matches('\r');
+            if line == "---" {
+                return Some(line_start);
+            }
+            line_start = i + 1;
+        }
+        i += 1;
+    }
+    // Tail without a trailing newline.
+    let line = s[line_start..].trim_end_matches('\r');
+    if line == "---" {
+        Some(line_start)
+    } else {
+        None
+    }
+}
+
+fn render_skill_md(fm: &SkillFrontmatter, body: &str) -> Result<String> {
+    let yaml = serde_yaml_ng::to_string(fm)
+        .map_err(|e| SkillsError::StorageError(format!("failed to serialise frontmatter: {e}")))?;
+    let body_trimmed = body.trim_end();
+    Ok(format!("---\n{yaml}---\n\n{body_trimmed}\n"))
+}
+
+fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, contents).map_err(|e| {
+        SkillsError::StorageError(format!("failed to write {}: {}", tmp.display(), e))
+    })?;
+    fs::rename(&tmp, path).map_err(|e| {
+        SkillsError::StorageError(format!(
+            "failed to rename {} -> {}: {}",
+            tmp.display(),
+            path.display(),
+            e
+        ))
+    })?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_full_frontmatter() {
+        let raw = "---\nname: foo\ndescription: bar\ntags: [a, b]\n---\nbody here\n";
+        let (fm, body) = parse_skill_md(raw).unwrap();
+        assert_eq!(fm.name, "foo");
+        assert_eq!(fm.description, "bar");
+        assert_eq!(fm.tags, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(body, "body here\n");
+    }
+
+    #[test]
+    fn parse_tolerates_bom_and_leading_whitespace() {
+        let raw = "\u{feff}\n---\nname: x\ndescription: y\n---\nz";
+        let (fm, body) = parse_skill_md(raw).unwrap();
+        assert_eq!(fm.name, "x");
+        assert_eq!(body, "z");
+    }
+
+    #[test]
+    fn parse_rejects_missing_frontmatter() {
+        assert!(parse_skill_md("plain markdown only").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_unterminated_frontmatter() {
+        assert!(parse_skill_md("---\nname: x\ndescription: y\nno closing fence").is_err());
+    }
+
+    #[test]
+    fn render_roundtrips() {
+        let fm = SkillFrontmatter {
+            name: "foo".into(),
+            description: "trigger description".into(),
+            tags: vec!["t1".into()],
+        };
+        let body = "## Section\n\nbody text";
+        let rendered = render_skill_md(&fm, body).unwrap();
+        let (parsed_fm, parsed_body) = parse_skill_md(&rendered).unwrap();
+        assert_eq!(parsed_fm.name, fm.name);
+        assert_eq!(parsed_fm.description, fm.description);
+        assert_eq!(parsed_fm.tags, fm.tags);
+        assert_eq!(parsed_body.trim(), body);
+    }
+
+    #[test]
+    fn write_and_read_round_trip() {
+        let temp = tempdir();
+        unsafe {
+            std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
+        }
+        let fm = SkillFrontmatter {
+            name: "demo".into(),
+            description: "demo desc".into(),
+            tags: vec![],
+        };
+        // Pre-create the demo dir inside our temp root so write_new sees
+        // the temp root as the only candidate write target.
+        let root_override = temp.path().to_path_buf();
+        fs::create_dir_all(root_override.join("demo")).unwrap();
+        let path = root_override.join("demo").join(SKILL_FILE);
+        atomic_write(&path, &render_skill_md(&fm, "body").unwrap()).unwrap();
+
+        let got = read("demo").unwrap();
+        assert_eq!(got.name, "demo");
+        assert_eq!(got.description, "demo desc");
+        assert_eq!(got.content.trim(), "body");
+
+        unsafe {
+            std::env::remove_var(ROOTS_ENV);
+        }
+    }
+
+    /// Tiny in-tree temp-dir helper to avoid pulling in the tempfile crate
+    /// for a single test.
+    fn tempdir() -> TempDir {
+        let path = std::env::temp_dir().join(format!(
+            "skills-mcp-test-{}-{}",
+            std::process::id(),
+            rand_suffix()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        TempDir { path }
+    }
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn rand_suffix() -> u64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as u64)
+            .unwrap_or(0)
+    }
+}

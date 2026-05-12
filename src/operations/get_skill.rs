@@ -1,21 +1,15 @@
 #![deny(warnings)]
 
-// Retrieve a skill by ID or name
-
-use crate::db::SkillDb;
 use crate::error::{McpError, Result};
+use crate::params::GetSkillParams;
+use crate::repo;
 use serde_json::Value;
 
-/// Parse arguments and retrieve a skill from the database.
-pub fn execute(args: &Value, db: &SkillDb) -> Result<Value> {
-    let id_or_name = args
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::InvalidToolParameters("Missing required parameter: id".to_string()))?;
-
-    let skill = db.get(id_or_name)?;
-    let text = serde_json::to_string_pretty(&skill)?;
+pub fn execute(args: &Value) -> Result<Value> {
+    let params: GetSkillParams = serde_json::from_value(args.clone())
+        .map_err(|e| McpError::InvalidToolParameters(e.to_string()))?;
+    let detail = repo::read(&params.name)?;
     Ok(serde_json::json!({
-        "content": [{"type": "text", "text": text}]
+        "content": [{"type": "text", "text": serde_json::to_string_pretty(&detail)?}],
     }))
 }
