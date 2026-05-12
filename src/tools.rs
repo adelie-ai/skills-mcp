@@ -4,6 +4,11 @@
 
 use crate::db::SkillDb;
 use crate::error::{McpError, Result};
+use crate::params::{
+    CreateSkillParams, DeleteSkillParams, GetSkillParams, ListSkillsParams, SearchSkillsParams,
+    UpdateSkillParams,
+};
+use schemars::{JsonSchema, schema_for};
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
@@ -26,148 +31,30 @@ impl ToolRegistry {
     /// Return all tool definitions in MCP JSON schema format.
     pub fn list_tools(&self) -> Value {
         serde_json::json!([
-            {
-                "name": "skills_create_skill",
-                "description": "Create a new skill entry. A skill is either a reusable code snippet (kind=code) or a natural-language how-to guide for an LLM agent (kind=howto). Returns the created skill as JSON including its assigned id.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "Unique human-friendly name for this skill. Must not be empty."
-                        },
-                        "kind": {
-                            "type": "string",
-                            "enum": ["code", "howto"],
-                            "description": "Type of skill: 'code' for executable code snippets, 'howto' for natural-language instructions."
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "The actual code or natural-language instructions. Must not be empty."
-                        },
-                        "language": {
-                            "type": "string",
-                            "description": "Programming language for kind=code (e.g. 'python', 'rust', 'bash'). Optional for kind=howto."
-                        },
-                        "description": {
-                            "type": "string",
-                            "description": "Short one-line description of what this skill does."
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Arbitrary tags for filtering and discovery."
-                        }
-                    },
-                    "required": ["name", "kind", "content"]
-                }
-            },
-            {
-                "name": "skills_get_skill",
-                "description": "Retrieve a single skill by its UUID id or by its unique name. Returns the full skill object as JSON.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "description": "The UUID id or exact name of the skill to retrieve."
-                        }
-                    },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "skills_update_skill",
-                "description": "Update one or more fields of an existing skill. Only the fields you provide are changed; omitted fields are left unchanged. Pass null for 'language' or 'description' to clear those fields. Returns the updated skill as JSON.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "description": "The UUID id or exact name of the skill to update."
-                        },
-                        "name": {
-                            "type": "string",
-                            "description": "New unique name for the skill."
-                        },
-                        "kind": {
-                            "type": "string",
-                            "enum": ["code", "howto"],
-                            "description": "New kind for the skill."
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Replacement content. Must not be empty."
-                        },
-                        "language": {
-                            "type": ["string", "null"],
-                            "description": "New programming language. Pass null to clear."
-                        },
-                        "description": {
-                            "type": ["string", "null"],
-                            "description": "New short description. Pass null to clear."
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Replacement tag list (replaces existing tags entirely)."
-                        }
-                    },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "skills_delete_skill",
-                "description": "Permanently delete a skill by its UUID id or exact name. Returns a confirmation message.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "description": "The UUID id or exact name of the skill to delete."
-                        }
-                    },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "skills_list_skills",
-                "description": "List all skills in the knowledge base, optionally filtered by kind and/or tags. Returns a JSON array of skill objects sorted by creation time.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "kind": {
-                            "type": "string",
-                            "enum": ["code", "howto"],
-                            "description": "If provided, return only skills of this kind."
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "If provided, return only skills that have at least one of these tags."
-                        }
-                    }
-                }
-            },
-            {
-                "name": "skills_search_skills",
-                "description": "Full-text search across all skills. Matches (case-insensitive) against name, description, content, tags, and language. Returns a JSON array of matching skill objects sorted by creation time.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query string. Matched case-insensitively against all text fields."
-                        },
-                        "kind": {
-                            "type": "string",
-                            "enum": ["code", "howto"],
-                            "description": "If provided, restrict search to skills of this kind."
-                        }
-                    },
-                    "required": ["query"]
-                }
-            }
+            tool_def::<CreateSkillParams>(
+                "skills_create_skill",
+                "Create a new skill entry. A skill is either a reusable code snippet (kind=code) or a natural-language how-to guide for an LLM agent (kind=howto). Returns the created skill as JSON including its assigned id."
+            ),
+            tool_def::<GetSkillParams>(
+                "skills_get_skill",
+                "Retrieve a single skill by its UUID id or by its unique name. Returns the full skill object as JSON."
+            ),
+            tool_def::<UpdateSkillParams>(
+                "skills_update_skill",
+                "Update one or more fields of an existing skill. Only the fields you provide are changed; omitted fields are left unchanged. Pass null for 'language' or 'description' to clear those fields. Returns the updated skill as JSON."
+            ),
+            tool_def::<DeleteSkillParams>(
+                "skills_delete_skill",
+                "Permanently delete a skill by its UUID id or exact name. Returns a confirmation message."
+            ),
+            tool_def::<ListSkillsParams>(
+                "skills_list_skills",
+                "List all skills in the knowledge base, optionally filtered by kind and/or tags. Returns a JSON array of skill objects sorted by creation time."
+            ),
+            tool_def::<SearchSkillsParams>(
+                "skills_search_skills",
+                "Full-text search across all skills. Matches (case-insensitive) against name, description, content, tags, and language. Returns a JSON array of matching skill objects sorted by creation time."
+            ),
         ])
     }
 
@@ -216,4 +103,20 @@ pub fn default_db_path() -> std::path::PathBuf {
     shellexpand::full("~/.skills-mcp/skills.json")
         .map(|s| std::path::PathBuf::from(s.as_ref()))
         .unwrap_or_else(|_| std::path::PathBuf::from(".skills-mcp/skills.json"))
+}
+
+/// Build an MCP tool definition from a params type's derived JSON schema.
+/// The schemars `$schema` key is stripped — MCP clients expect a plain
+/// JSON Schema fragment, not a top-level draft declaration.
+fn tool_def<T: JsonSchema>(name: &str, description: &str) -> Value {
+    let mut schema = serde_json::to_value(schema_for!(T)).unwrap_or(Value::Null);
+    if let Some(obj) = schema.as_object_mut() {
+        obj.remove("$schema");
+        obj.remove("title");
+    }
+    serde_json::json!({
+        "name": name,
+        "description": description,
+        "inputSchema": schema,
+    })
 }

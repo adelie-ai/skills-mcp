@@ -6,6 +6,7 @@
 pub mod db;
 pub mod error;
 pub mod operations;
+pub mod params;
 pub mod server;
 pub mod tools;
 pub mod transport;
