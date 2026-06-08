@@ -8,6 +8,10 @@ use serde_json::Value;
 pub fn execute(args: &Value) -> Result<Value> {
     let params: UpdateSkillParams = serde_json::from_value(args.clone())
         .map_err(|e| McpError::InvalidToolParameters(e.to_string()))?;
+    repo::validate_skill_name(&params.name)?;
+    if let Some(new_name) = &params.new_name {
+        repo::validate_skill_name(new_name)?;
+    }
     let detail = repo::write_update(
         &params.name,
         UpdatePatch {

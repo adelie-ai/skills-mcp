@@ -29,6 +29,35 @@ pub const SKILL_FILE: &str = "SKILL.md";
 /// Environment variable used to add extra skill roots (colon-separated).
 pub const ROOTS_ENV: &str = "SKILLS_MCP_ROOTS";
 
+/// Validate a skill name before it is joined onto a root directory.
+///
+/// Why: every filesystem operation derives a path via `root.join(name)`. An
+/// unsanitised `name` such as `../../etc` or `/etc/motd` would escape the
+/// configured root and let a caller read, create, rename, or delete arbitrary
+/// paths. We require the trimmed name to be a single non-empty path component
+/// that is `Component::Normal` (rejecting `.`, `..`, absolute prefixes, and
+/// any embedded `/` or `\` separator).
+pub fn validate_skill_name(name: &str) -> Result<()> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(SkillsError::InvalidInput("name must not be empty".into()).into());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err(SkillsError::InvalidInput(format!(
+            "skill name must not contain path separators: {trimmed:?}"
+        ))
+        .into());
+    }
+    let mut components = Path::new(trimmed).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(()),
+        _ => Err(SkillsError::InvalidInput(format!(
+            "skill name must be a single normal path component, not {trimmed:?}"
+        ))
+        .into()),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SkillFrontmatter {
     /// Stable identifier for the skill. Must match the directory name.
@@ -88,6 +117,13 @@ pub fn lookup_roots() -> Vec<PathBuf> {
             }
         }
     }
+    // The write root must also be a read root, otherwise skills created via
+    // `write_new` (e.g. into a $SKILLS_MCP_WRITE_ROOT override) would be
+    // invisible to list/find/search.
+    let write_root = default_write_root();
+    if write_root.is_dir() && !roots.contains(&write_root) {
+        roots.push(write_root);
+    }
     roots
 }
 
@@ -123,7 +159,7 @@ pub fn list_all() -> Vec<SkillSummary> {
             if entry.file_name() != SKILL_FILE {
                 continue;
             }
-            match read_summary(&entry.path().to_path_buf(), &root) {
+            match read_summary(entry.path(), &root) {
                 Ok(s) => out.push(s),
                 Err(e) => {
                     eprintln!(
@@ -140,7 +176,12 @@ pub fn list_all() -> Vec<SkillSummary> {
 }
 
 /// Locate a skill by name across all configured roots. Returns the first match.
+/// Returns `None` for names that fail [`validate_skill_name`] so a traversal
+/// attempt can never resolve to a real file outside a root.
 pub fn find(name: &str) -> Option<(PathBuf, PathBuf)> {
+    if validate_skill_name(name).is_err() {
+        return None;
+    }
     let name = name.trim();
     for root in lookup_roots() {
         let dir = root.join(name);
@@ -189,9 +230,8 @@ fn read_summary(path: &Path, root: &Path) -> Result<SkillSummary> {
 /// Write a new skill. Errors if a skill with the same name already exists
 /// in any configured root.
 pub fn write_new(name: &str, fm: &SkillFrontmatter, body: &str) -> Result<SkillDetail> {
-    if name.trim().is_empty() {
-        return Err(SkillsError::InvalidInput("name must not be empty".into()).into());
-    }
+    validate_skill_name(name)?;
+    let name = name.trim();
     if fm.description.trim().is_empty() {
         return Err(SkillsError::InvalidInput("description must not be empty".into()).into());
     }
@@ -234,7 +274,13 @@ pub fn write_new(name: &str, fm: &SkillFrontmatter, body: &str) -> Result<SkillD
 /// changed; the rest are read from disk.
 pub fn write_update(name: &str, patch: UpdatePatch) -> Result<SkillDetail> {
     let current = read(name)?;
-    let new_name = patch.name.unwrap_or_else(|| current.name.clone());
+    let new_name = match patch.name {
+        Some(n) => {
+            validate_skill_name(&n)?;
+            n.trim().to_string()
+        }
+        None => current.name.clone(),
+    };
     if new_name != current.name && find(&new_name).is_some() {
         return Err(SkillsError::AlreadyExists(new_name).into());
     }
@@ -246,7 +292,9 @@ pub fn write_update(name: &str, patch: UpdatePatch) -> Result<SkillDetail> {
     let body = patch.content.unwrap_or(current.content);
     let serialised = render_skill_md(&fm, &body)?;
     let current_path = PathBuf::from(&current.path);
-    let current_dir = current_path.parent().expect("SKILL.md has a parent dir");
+    let current_dir = current_path.parent().ok_or_else(|| {
+        SkillsError::StorageError(format!("{} has no parent directory", current_path.display()))
+    })?;
 
     let final_dir = if new_name != current.name {
         let root = PathBuf::from(&current.root);
@@ -288,9 +336,12 @@ pub struct UpdatePatch {
 /// Delete a skill directory recursively. Returns the deleted skill's
 /// summary so the caller can confirm what was removed.
 pub fn delete(name: &str) -> Result<SkillSummary> {
+    validate_skill_name(name)?;
     let (path, root) = find(name).ok_or_else(|| SkillsError::NotFound(name.to_string()))?;
     let summary = read_summary(&path, &root)?;
-    let dir = path.parent().expect("SKILL.md has a parent dir");
+    let dir = path.parent().ok_or_else(|| {
+        SkillsError::StorageError(format!("{} has no parent directory", path.display()))
+    })?;
     fs::remove_dir_all(dir).map_err(|e| {
         SkillsError::StorageError(format!("failed to remove {}: {}", dir.display(), e))
     })?;
@@ -334,6 +385,9 @@ fn collect_attachments(skill_md_path: &Path) -> Vec<String> {
     };
     let mut out: Vec<String> = walkdir::WalkDir::new(dir)
         .min_depth(1)
+        // Bound recursion so a pathological skill directory can't make an
+        // attachment listing walk an unbounded tree.
+        .max_depth(4)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path() != skill_md_path && e.file_type().is_file())
