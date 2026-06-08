@@ -430,6 +430,149 @@ fn atomic_write(path: &Path, contents: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::SkillsMcpError;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Serialise tests that mutate the process-global skill-root env vars so
+    /// they don't race each other under the default parallel test runner.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Acquire the env lock, recovering from a poisoned mutex (a panic in
+    /// another env-mutating test must not cascade into spurious failures).
+    fn env_guard() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn validate_skill_name_accepts_benign() {
+        validate_skill_name("my-skill").expect("plain name is valid");
+        validate_skill_name("nested-ok_123").expect("alnum/dash/underscore is valid");
+    }
+
+    #[test]
+    fn validate_skill_name_rejects_traversal() {
+        assert!(validate_skill_name("../escape").is_err());
+        assert!(validate_skill_name("../../../tmp/x").is_err());
+        assert!(validate_skill_name("a/b").is_err());
+        assert!(validate_skill_name("a\\b").is_err());
+        assert!(validate_skill_name("/absolute").is_err());
+        assert!(validate_skill_name("/etc/motd").is_err());
+        assert!(validate_skill_name(".").is_err());
+        assert!(validate_skill_name("..").is_err());
+        assert!(validate_skill_name("").is_err());
+        assert!(validate_skill_name("   ").is_err());
+    }
+
+    #[test]
+    fn find_rejects_traversal() {
+        let _g = env_guard();
+        let temp = tempdir();
+        unsafe {
+            std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
+        }
+        assert!(find("../../../tmp/x").is_none());
+        assert!(find("/etc/motd").is_none());
+        unsafe {
+            std::env::remove_var(ROOTS_ENV);
+        }
+    }
+
+    #[test]
+    fn write_new_rejects_traversal() {
+        let _g = env_guard();
+        let temp = tempdir();
+        unsafe {
+            std::env::set_var(WRITE_ROOT_ENV, temp.path().display().to_string());
+            std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
+        }
+        let fm = SkillFrontmatter {
+            name: "../escape".into(),
+            description: "d".into(),
+            tags: vec![],
+        };
+        let err = write_new("../escape", &fm, "body").unwrap_err();
+        assert!(matches!(err, SkillsMcpError::Skills(SkillsError::InvalidInput(_))));
+        // Nothing escaped the configured root.
+        assert!(!temp.path().parent().unwrap().join("escape").exists());
+        unsafe {
+            std::env::remove_var(WRITE_ROOT_ENV);
+            std::env::remove_var(ROOTS_ENV);
+        }
+    }
+
+    #[test]
+    fn write_update_rejects_traversal_new_name() {
+        let _g = env_guard();
+        let temp = tempdir();
+        unsafe {
+            std::env::set_var(WRITE_ROOT_ENV, temp.path().display().to_string());
+            std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
+        }
+        let fm = SkillFrontmatter {
+            name: "real".into(),
+            description: "d".into(),
+            tags: vec![],
+        };
+        write_new("real", &fm, "body").expect("create real skill");
+        let err = write_update(
+            "real",
+            UpdatePatch {
+                name: Some("/etc/motd".into()),
+                description: None,
+                content: None,
+                tags: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, SkillsMcpError::Skills(SkillsError::InvalidInput(_))));
+        unsafe {
+            std::env::remove_var(WRITE_ROOT_ENV);
+            std::env::remove_var(ROOTS_ENV);
+        }
+    }
+
+    #[test]
+    fn delete_rejects_traversal() {
+        let _g = env_guard();
+        let temp = tempdir();
+        unsafe {
+            std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
+        }
+        let err = delete("../../../tmp/x").unwrap_err();
+        assert!(matches!(
+            err,
+            SkillsMcpError::Skills(SkillsError::InvalidInput(_))
+                | SkillsMcpError::Skills(SkillsError::NotFound(_))
+        ));
+        unsafe {
+            std::env::remove_var(ROOTS_ENV);
+        }
+    }
+
+    #[test]
+    fn write_root_is_searchable() {
+        let _g = env_guard();
+        let temp = tempdir();
+        // Only the write-root env is set; the skill must still be listable.
+        unsafe {
+            std::env::set_var(WRITE_ROOT_ENV, temp.path().display().to_string());
+            std::env::remove_var(ROOTS_ENV);
+        }
+        let fm = SkillFrontmatter {
+            name: "in-write-root".into(),
+            description: "d".into(),
+            tags: vec![],
+        };
+        write_new("in-write-root", &fm, "body").expect("create in write root");
+        let names: Vec<String> = list_all().into_iter().map(|s| s.name).collect();
+        assert!(
+            names.contains(&"in-write-root".to_string()),
+            "skill created in write-root should appear in list_all: {names:?}"
+        );
+        unsafe {
+            std::env::remove_var(WRITE_ROOT_ENV);
+        }
+    }
 
     #[test]
     fn parse_full_frontmatter() {
@@ -477,6 +620,7 @@ mod tests {
 
     #[test]
     fn write_and_read_round_trip() {
+        let _g = env_guard();
         let temp = tempdir();
         unsafe {
             std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
