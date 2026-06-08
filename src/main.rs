@@ -241,7 +241,13 @@ async fn handle_jsonrpc_message(server: Arc<McpServer>, message: Value) -> Optio
             let tool_name = params.get("name").and_then(|n| n.as_str());
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
             if let Some(name) = tool_name {
-                server.handle_tool_call(name, arguments).await
+                // Per the MCP spec a tool that fails to execute reports the
+                // failure as `isError: true` content, not as a JSON-RPC error
+                // (JSON-RPC errors are reserved for protocol-level problems).
+                match server.handle_tool_call(name, arguments).await {
+                    Ok(value) => Ok(value),
+                    Err(e) => Ok(tool_error_result(&e.to_string())),
+                }
             } else {
                 return Some(jsonrpc_error_response(
                     id,
@@ -309,4 +315,79 @@ fn jsonrpc_error_response(
             "data": data,
         },
     })
+}
+
+/// MCP `tools/call` result for a tool that failed to execute: text content
+/// plus `isError: true`, as required by the spec (distinct from a
+/// protocol-level JSON-RPC error).
+fn tool_error_result(message: &str) -> Value {
+    serde_json::json!({
+        "content": [{"type": "text", "text": message}],
+        "isError": true,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    async fn ready_server() -> Arc<McpServer> {
+        let server = Arc::new(McpServer::new().expect("server"));
+        server
+            .handle_initialize("2024-11-05", &Value::Null)
+            .await
+            .expect("initialize");
+        server
+    }
+
+    #[tokio::test]
+    async fn failed_tool_call_reports_is_error_not_jsonrpc_error() {
+        let server = ready_server().await;
+        // Missing required `name` argument makes the operation fail.
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": { "name": "skills_get_skill", "arguments": {} },
+        });
+        let resp = handle_jsonrpc_message(server, request)
+            .await
+            .expect("a response");
+        assert!(resp.get("error").is_none(), "must not be a JSON-RPC error: {resp}");
+        let result = resp.get("result").expect("a result");
+        assert_eq!(result.get("isError"), Some(&Value::Bool(true)));
+        assert!(result["content"][0]["text"].is_string());
+    }
+
+    #[tokio::test]
+    async fn successful_tool_call_has_no_is_error() {
+        let server = ready_server().await;
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": { "name": "skills_list_skills", "arguments": {} },
+        });
+        let resp = handle_jsonrpc_message(server, request)
+            .await
+            .expect("a response");
+        assert!(resp.get("error").is_none());
+        let result = resp.get("result").expect("a result");
+        assert!(result.get("isError").is_none());
+    }
+
+    #[tokio::test]
+    async fn unknown_method_is_still_a_jsonrpc_error() {
+        let server = ready_server().await;
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "no/such/method",
+        });
+        let resp = handle_jsonrpc_message(server, request)
+            .await
+            .expect("a response");
+        assert_eq!(resp["error"]["code"], serde_json::json!(-32601));
+    }
 }
