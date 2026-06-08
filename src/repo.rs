@@ -82,6 +82,25 @@ pub struct SkillSummary {
     pub attachments: Vec<String>,
 }
 
+impl SkillSummary {
+    /// Render this summary for an LLM-facing list/search response. The absolute
+    /// `path`/`root` fields are omitted unless `include_paths` is set, to save
+    /// tokens and avoid leaking the host filesystem layout.
+    pub fn to_view(&self, include_paths: bool) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "name": self.name,
+            "description": self.description,
+            "tags": self.tags,
+            "attachments": self.attachments,
+        });
+        if include_paths && let Some(obj) = value.as_object_mut() {
+            obj.insert("path".into(), serde_json::Value::String(self.path.clone()));
+            obj.insert("root".into(), serde_json::Value::String(self.root.clone()));
+        }
+        value
+    }
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct SkillDetail {
     pub name: String,
@@ -162,11 +181,7 @@ pub fn list_all() -> Vec<SkillSummary> {
             match read_summary(entry.path(), &root) {
                 Ok(s) => out.push(s),
                 Err(e) => {
-                    eprintln!(
-                        "skills-mcp: skipping {}: {}",
-                        entry.path().display(),
-                        e
-                    );
+                    eprintln!("skills-mcp: skipping {}: {}", entry.path().display(), e);
                 }
             }
         }
@@ -293,7 +308,10 @@ pub fn write_update(name: &str, patch: UpdatePatch) -> Result<SkillDetail> {
     let serialised = render_skill_md(&fm, &body)?;
     let current_path = PathBuf::from(&current.path);
     let current_dir = current_path.parent().ok_or_else(|| {
-        SkillsError::StorageError(format!("{} has no parent directory", current_path.display()))
+        SkillsError::StorageError(format!(
+            "{} has no parent directory",
+            current_path.display()
+        ))
     })?;
 
     let final_dir = if new_name != current.name {
@@ -353,8 +371,7 @@ pub fn search(query: &str, required_tags: &[String]) -> Vec<SkillSummary> {
     let needle = query.to_lowercase();
     let mut out = Vec::new();
     for s in list_all() {
-        if !required_tags.is_empty()
-            && !required_tags.iter().any(|t| s.tags.iter().any(|x| x == t))
+        if !required_tags.is_empty() && !required_tags.iter().any(|t| s.tags.iter().any(|x| x == t))
         {
             continue;
         }
@@ -545,7 +562,10 @@ mod tests {
             tags: vec![],
         };
         let err = write_new("../escape", &fm, "body").unwrap_err();
-        assert!(matches!(err, SkillsMcpError::Skills(SkillsError::InvalidInput(_))));
+        assert!(matches!(
+            err,
+            SkillsMcpError::Skills(SkillsError::InvalidInput(_))
+        ));
         // Nothing escaped the configured root.
         assert!(!temp.path().parent().unwrap().join("escape").exists());
         unsafe {
@@ -578,7 +598,10 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(matches!(err, SkillsMcpError::Skills(SkillsError::InvalidInput(_))));
+        assert!(matches!(
+            err,
+            SkillsMcpError::Skills(SkillsError::InvalidInput(_))
+        ));
         unsafe {
             std::env::remove_var(WRITE_ROOT_ENV);
             std::env::remove_var(ROOTS_ENV);
@@ -626,6 +649,26 @@ mod tests {
         unsafe {
             std::env::remove_var(WRITE_ROOT_ENV);
         }
+    }
+
+    #[test]
+    fn summary_view_omits_paths_by_default() {
+        let s = SkillSummary {
+            name: "n".into(),
+            description: "d".into(),
+            tags: vec!["t".into()],
+            path: "/secret/n/SKILL.md".into(),
+            root: "/secret".into(),
+            attachments: vec![],
+        };
+        let default = s.to_view(false);
+        assert!(default.get("path").is_none());
+        assert!(default.get("root").is_none());
+        assert_eq!(default["name"], "n");
+
+        let with_paths = s.to_view(true);
+        assert_eq!(with_paths["path"], "/secret/n/SKILL.md");
+        assert_eq!(with_paths["root"], "/secret");
     }
 
     #[test]

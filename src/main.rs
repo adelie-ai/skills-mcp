@@ -3,16 +3,16 @@
 // Binary crate for skills-mcp
 
 use axum::{
-    extract::{ws::WebSocketUpgrade, State},
+    Router,
+    extract::{State, ws::WebSocketUpgrade},
     response::Response,
     routing::get,
-    Router,
 };
 use clap::{Parser, ValueEnum};
+use serde_json::Value;
 use skills_mcp::error::Result;
 use skills_mcp::server::McpServer;
 use skills_mcp::transport::StdioTransportHandler;
-use serde_json::Value;
 use std::fmt;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -174,11 +174,11 @@ async fn handle_websocket_connection(socket: axum::extract::ws::WebSocket, serve
 
                 if let Some(resp) = response
                     && let Ok(resp_str) = serde_json::to_string(&resp)
-                        && let Err(e) = sender.send(Message::Text(resp_str.into())).await
-                        {
-                            eprintln!("Error sending WebSocket response: {}", e);
-                            break;
-                        }
+                    && let Err(e) = sender.send(Message::Text(resp_str.into())).await
+                {
+                    eprintln!("Error sending WebSocket response: {}", e);
+                    break;
+                }
             }
             Ok(Message::Close(_)) => break,
             Err(e) => {
@@ -354,7 +354,10 @@ mod tests {
         let resp = handle_jsonrpc_message(server, request)
             .await
             .expect("a response");
-        assert!(resp.get("error").is_none(), "must not be a JSON-RPC error: {resp}");
+        assert!(
+            resp.get("error").is_none(),
+            "must not be a JSON-RPC error: {resp}"
+        );
         let result = resp.get("result").expect("a result");
         assert_eq!(result.get("isError"), Some(&Value::Bool(true)));
         assert!(result["content"][0]["text"].is_string());

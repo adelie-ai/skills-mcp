@@ -122,13 +122,21 @@ mod tests {
     #[tokio::test]
     async fn initialize_rejects_unknown_version() {
         let server = McpServer::new().unwrap();
-        assert!(server.handle_initialize("1999-01-01", &json!({})).await.is_err());
+        assert!(
+            server
+                .handle_initialize("1999-01-01", &json!({}))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn initialize_result_has_no_top_level_tools_key() {
         let server = McpServer::new().unwrap();
-        let result = server.handle_initialize("2024-11-05", &json!({})).await.unwrap();
+        let result = server
+            .handle_initialize("2024-11-05", &json!({}))
+            .await
+            .unwrap();
         assert!(
             result.get("tools").is_none(),
             "tools belong to tools/list, not the initialize result"
