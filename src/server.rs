@@ -81,3 +81,55 @@ impl McpServer {
         *self.initialized.read().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn initialize_marks_server_initialized() {
+        let server = McpServer::new().unwrap();
+        assert!(!server.is_initialized().await);
+        server
+            .handle_initialize("2024-11-05", &json!({}))
+            .await
+            .unwrap();
+        assert!(
+            server.is_initialized().await,
+            "tools/list right after initialize must work without a separate notification"
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_accepts_current_claude_code_version() {
+        let server = McpServer::new().unwrap();
+        server
+            .handle_initialize("2025-03-26", &json!({}))
+            .await
+            .expect("2025-03-26 (current Claude Code) must be accepted");
+        let server = McpServer::new().unwrap();
+        server
+            .handle_initialize("2024-11-05", &json!({}))
+            .await
+            .expect("2024-11-05 must be accepted");
+    }
+
+    #[tokio::test]
+    async fn initialize_rejects_unknown_version() {
+        let server = McpServer::new().unwrap();
+        assert!(server.handle_initialize("1999-01-01", &json!({})).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn initialize_result_has_no_top_level_tools_key() {
+        let server = McpServer::new().unwrap();
+        let result = server.handle_initialize("2024-11-05", &json!({})).await.unwrap();
+        assert!(
+            result.get("tools").is_none(),
+            "tools belong to tools/list, not the initialize result"
+        );
+        assert!(result.get("protocolVersion").is_some());
+        assert!(result.get("capabilities").is_some());
+    }
+}
