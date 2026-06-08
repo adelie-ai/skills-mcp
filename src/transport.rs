@@ -67,9 +67,7 @@ impl StdioTransportHandler {
     pub async fn write_message(&mut self, message: &str) -> Result<()> {
         match self.framing {
             StdioFraming::ContentLength => self.write_message_content_length(message).await,
-            StdioFraming::Auto | StdioFraming::Newline => {
-                self.write_message_newline(message).await
-            }
+            StdioFraming::Auto | StdioFraming::Newline => self.write_message_newline(message).await,
         }
     }
 

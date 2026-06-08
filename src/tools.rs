@@ -36,7 +36,7 @@ impl ToolRegistry {
             ),
             tool_def::<UpdateSkillParams>(
                 "skills_update_skill",
-                "Modify an existing skill in place. Only the fields you set are changed. If `new_name` is provided the skill directory is renamed."
+                "Modify an existing skill in place. Only the fields you set are changed. If `new_name` is provided the skill directory is renamed. Note: `tags` fully replaces the existing tag list (it is not merged)."
             ),
             tool_def::<DeleteSkillParams>(
                 "skills_delete_skill",
@@ -44,11 +44,11 @@ impl ToolRegistry {
             ),
             tool_def::<ListSkillsParams>(
                 "skills_list_skills",
-                "List every skill across all configured roots. Returns name, description, tags, path, root, and attachment filenames for each. Optionally filter by tag."
+                "List every skill across all configured roots. Returns name, description, tags, and attachment filenames for each (set `include_paths` to also return absolute path/root). Optionally filter by tag."
             ),
             tool_def::<SearchSkillsParams>(
                 "skills_search_skills",
-                "Case-insensitive full-text search across skill names, descriptions, tags, and SKILL.md bodies. Optionally restrict to skills carrying at least one of the supplied tags."
+                "Case-insensitive full-text search across skill names, descriptions, tags, and SKILL.md bodies. Returns metadata only (name, description, tags, attachments) — call skills_get_skill for a match's body. Optionally restrict to skills carrying at least one of the supplied tags."
             ),
         ])
     }

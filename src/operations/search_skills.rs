@@ -10,7 +10,11 @@ pub fn execute(args: &Value) -> Result<Value> {
         .map_err(|e| McpError::InvalidToolParameters(e.to_string()))?;
     let tags = params.tags.unwrap_or_default();
     let results = repo::search(&params.query, &tags);
+    let views: Vec<Value> = results
+        .iter()
+        .map(|s| s.to_view(params.include_paths))
+        .collect();
     Ok(serde_json::json!({
-        "content": [{"type": "text", "text": serde_json::to_string_pretty(&results)?}],
+        "content": [{"type": "text", "text": serde_json::to_string_pretty(&views)?}],
     }))
 }

@@ -10,6 +10,7 @@ use serde_json::Value;
 pub fn execute(args: &Value) -> Result<Value> {
     let params: CreateSkillParams = serde_json::from_value(args.clone())
         .map_err(|e| McpError::InvalidToolParameters(e.to_string()))?;
+    repo::validate_skill_name(&params.name)?;
     if params.content.trim().is_empty() {
         return Err(SkillsError::InvalidInput("content must not be empty".into()).into());
     }

@@ -13,7 +13,11 @@ pub fn execute(args: &Value) -> Result<Value> {
     if !required.is_empty() {
         skills.retain(|s| required.iter().any(|t| s.tags.iter().any(|x| x == t)));
     }
+    let views: Vec<Value> = skills
+        .iter()
+        .map(|s| s.to_view(params.include_paths))
+        .collect();
     Ok(serde_json::json!({
-        "content": [{"type": "text", "text": serde_json::to_string_pretty(&skills)?}],
+        "content": [{"type": "text", "text": serde_json::to_string_pretty(&views)?}],
     }))
 }

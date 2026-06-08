@@ -29,6 +29,35 @@ pub const SKILL_FILE: &str = "SKILL.md";
 /// Environment variable used to add extra skill roots (colon-separated).
 pub const ROOTS_ENV: &str = "SKILLS_MCP_ROOTS";
 
+/// Validate a skill name before it is joined onto a root directory.
+///
+/// Why: every filesystem operation derives a path via `root.join(name)`. An
+/// unsanitised `name` such as `../../etc` or `/etc/motd` would escape the
+/// configured root and let a caller read, create, rename, or delete arbitrary
+/// paths. We require the trimmed name to be a single non-empty path component
+/// that is `Component::Normal` (rejecting `.`, `..`, absolute prefixes, and
+/// any embedded `/` or `\` separator).
+pub fn validate_skill_name(name: &str) -> Result<()> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(SkillsError::InvalidInput("name must not be empty".into()).into());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err(SkillsError::InvalidInput(format!(
+            "skill name must not contain path separators: {trimmed:?}"
+        ))
+        .into());
+    }
+    let mut components = Path::new(trimmed).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(()),
+        _ => Err(SkillsError::InvalidInput(format!(
+            "skill name must be a single normal path component, not {trimmed:?}"
+        ))
+        .into()),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SkillFrontmatter {
     /// Stable identifier for the skill. Must match the directory name.
@@ -51,6 +80,25 @@ pub struct SkillSummary {
     pub root: String,
     /// Names of additional files in the skill directory (relative to the directory).
     pub attachments: Vec<String>,
+}
+
+impl SkillSummary {
+    /// Render this summary for an LLM-facing list/search response. The absolute
+    /// `path`/`root` fields are omitted unless `include_paths` is set, to save
+    /// tokens and avoid leaking the host filesystem layout.
+    pub fn to_view(&self, include_paths: bool) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "name": self.name,
+            "description": self.description,
+            "tags": self.tags,
+            "attachments": self.attachments,
+        });
+        if include_paths && let Some(obj) = value.as_object_mut() {
+            obj.insert("path".into(), serde_json::Value::String(self.path.clone()));
+            obj.insert("root".into(), serde_json::Value::String(self.root.clone()));
+        }
+        value
+    }
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -88,6 +136,13 @@ pub fn lookup_roots() -> Vec<PathBuf> {
             }
         }
     }
+    // The write root must also be a read root, otherwise skills created via
+    // `write_new` (e.g. into a $SKILLS_MCP_WRITE_ROOT override) would be
+    // invisible to list/find/search.
+    let write_root = default_write_root();
+    if write_root.is_dir() && !roots.contains(&write_root) {
+        roots.push(write_root);
+    }
     roots
 }
 
@@ -123,14 +178,10 @@ pub fn list_all() -> Vec<SkillSummary> {
             if entry.file_name() != SKILL_FILE {
                 continue;
             }
-            match read_summary(&entry.path().to_path_buf(), &root) {
+            match read_summary(entry.path(), &root) {
                 Ok(s) => out.push(s),
                 Err(e) => {
-                    eprintln!(
-                        "skills-mcp: skipping {}: {}",
-                        entry.path().display(),
-                        e
-                    );
+                    eprintln!("skills-mcp: skipping {}: {}", entry.path().display(), e);
                 }
             }
         }
@@ -140,7 +191,12 @@ pub fn list_all() -> Vec<SkillSummary> {
 }
 
 /// Locate a skill by name across all configured roots. Returns the first match.
+/// Returns `None` for names that fail [`validate_skill_name`] so a traversal
+/// attempt can never resolve to a real file outside a root.
 pub fn find(name: &str) -> Option<(PathBuf, PathBuf)> {
+    if validate_skill_name(name).is_err() {
+        return None;
+    }
     let name = name.trim();
     for root in lookup_roots() {
         let dir = root.join(name);
@@ -189,9 +245,8 @@ fn read_summary(path: &Path, root: &Path) -> Result<SkillSummary> {
 /// Write a new skill. Errors if a skill with the same name already exists
 /// in any configured root.
 pub fn write_new(name: &str, fm: &SkillFrontmatter, body: &str) -> Result<SkillDetail> {
-    if name.trim().is_empty() {
-        return Err(SkillsError::InvalidInput("name must not be empty".into()).into());
-    }
+    validate_skill_name(name)?;
+    let name = name.trim();
     if fm.description.trim().is_empty() {
         return Err(SkillsError::InvalidInput("description must not be empty".into()).into());
     }
@@ -234,7 +289,13 @@ pub fn write_new(name: &str, fm: &SkillFrontmatter, body: &str) -> Result<SkillD
 /// changed; the rest are read from disk.
 pub fn write_update(name: &str, patch: UpdatePatch) -> Result<SkillDetail> {
     let current = read(name)?;
-    let new_name = patch.name.unwrap_or_else(|| current.name.clone());
+    let new_name = match patch.name {
+        Some(n) => {
+            validate_skill_name(&n)?;
+            n.trim().to_string()
+        }
+        None => current.name.clone(),
+    };
     if new_name != current.name && find(&new_name).is_some() {
         return Err(SkillsError::AlreadyExists(new_name).into());
     }
@@ -246,7 +307,12 @@ pub fn write_update(name: &str, patch: UpdatePatch) -> Result<SkillDetail> {
     let body = patch.content.unwrap_or(current.content);
     let serialised = render_skill_md(&fm, &body)?;
     let current_path = PathBuf::from(&current.path);
-    let current_dir = current_path.parent().expect("SKILL.md has a parent dir");
+    let current_dir = current_path.parent().ok_or_else(|| {
+        SkillsError::StorageError(format!(
+            "{} has no parent directory",
+            current_path.display()
+        ))
+    })?;
 
     let final_dir = if new_name != current.name {
         let root = PathBuf::from(&current.root);
@@ -288,9 +354,12 @@ pub struct UpdatePatch {
 /// Delete a skill directory recursively. Returns the deleted skill's
 /// summary so the caller can confirm what was removed.
 pub fn delete(name: &str) -> Result<SkillSummary> {
+    validate_skill_name(name)?;
     let (path, root) = find(name).ok_or_else(|| SkillsError::NotFound(name.to_string()))?;
     let summary = read_summary(&path, &root)?;
-    let dir = path.parent().expect("SKILL.md has a parent dir");
+    let dir = path.parent().ok_or_else(|| {
+        SkillsError::StorageError(format!("{} has no parent directory", path.display()))
+    })?;
     fs::remove_dir_all(dir).map_err(|e| {
         SkillsError::StorageError(format!("failed to remove {}: {}", dir.display(), e))
     })?;
@@ -302,8 +371,7 @@ pub fn search(query: &str, required_tags: &[String]) -> Vec<SkillSummary> {
     let needle = query.to_lowercase();
     let mut out = Vec::new();
     for s in list_all() {
-        if !required_tags.is_empty()
-            && !required_tags.iter().any(|t| s.tags.iter().any(|x| x == t))
+        if !required_tags.is_empty() && !required_tags.iter().any(|t| s.tags.iter().any(|x| x == t))
         {
             continue;
         }
@@ -334,6 +402,9 @@ fn collect_attachments(skill_md_path: &Path) -> Vec<String> {
     };
     let mut out: Vec<String> = walkdir::WalkDir::new(dir)
         .min_depth(1)
+        // Bound recursion so a pathological skill directory can't make an
+        // attachment listing walk an unbounded tree.
+        .max_depth(4)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path() != skill_md_path && e.file_type().is_file())
@@ -430,6 +501,175 @@ fn atomic_write(path: &Path, contents: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::SkillsMcpError;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Serialise tests that mutate the process-global skill-root env vars so
+    /// they don't race each other under the default parallel test runner.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Acquire the env lock, recovering from a poisoned mutex (a panic in
+    /// another env-mutating test must not cascade into spurious failures).
+    fn env_guard() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn validate_skill_name_accepts_benign() {
+        validate_skill_name("my-skill").expect("plain name is valid");
+        validate_skill_name("nested-ok_123").expect("alnum/dash/underscore is valid");
+    }
+
+    #[test]
+    fn validate_skill_name_rejects_traversal() {
+        assert!(validate_skill_name("../escape").is_err());
+        assert!(validate_skill_name("../../../tmp/x").is_err());
+        assert!(validate_skill_name("a/b").is_err());
+        assert!(validate_skill_name("a\\b").is_err());
+        assert!(validate_skill_name("/absolute").is_err());
+        assert!(validate_skill_name("/etc/motd").is_err());
+        assert!(validate_skill_name(".").is_err());
+        assert!(validate_skill_name("..").is_err());
+        assert!(validate_skill_name("").is_err());
+        assert!(validate_skill_name("   ").is_err());
+    }
+
+    #[test]
+    fn find_rejects_traversal() {
+        let _g = env_guard();
+        let temp = tempdir();
+        unsafe {
+            std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
+        }
+        assert!(find("../../../tmp/x").is_none());
+        assert!(find("/etc/motd").is_none());
+        unsafe {
+            std::env::remove_var(ROOTS_ENV);
+        }
+    }
+
+    #[test]
+    fn write_new_rejects_traversal() {
+        let _g = env_guard();
+        let temp = tempdir();
+        unsafe {
+            std::env::set_var(WRITE_ROOT_ENV, temp.path().display().to_string());
+            std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
+        }
+        let fm = SkillFrontmatter {
+            name: "../escape".into(),
+            description: "d".into(),
+            tags: vec![],
+        };
+        let err = write_new("../escape", &fm, "body").unwrap_err();
+        assert!(matches!(
+            err,
+            SkillsMcpError::Skills(SkillsError::InvalidInput(_))
+        ));
+        // Nothing escaped the configured root.
+        assert!(!temp.path().parent().unwrap().join("escape").exists());
+        unsafe {
+            std::env::remove_var(WRITE_ROOT_ENV);
+            std::env::remove_var(ROOTS_ENV);
+        }
+    }
+
+    #[test]
+    fn write_update_rejects_traversal_new_name() {
+        let _g = env_guard();
+        let temp = tempdir();
+        unsafe {
+            std::env::set_var(WRITE_ROOT_ENV, temp.path().display().to_string());
+            std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
+        }
+        let fm = SkillFrontmatter {
+            name: "real".into(),
+            description: "d".into(),
+            tags: vec![],
+        };
+        write_new("real", &fm, "body").expect("create real skill");
+        let err = write_update(
+            "real",
+            UpdatePatch {
+                name: Some("/etc/motd".into()),
+                description: None,
+                content: None,
+                tags: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            SkillsMcpError::Skills(SkillsError::InvalidInput(_))
+        ));
+        unsafe {
+            std::env::remove_var(WRITE_ROOT_ENV);
+            std::env::remove_var(ROOTS_ENV);
+        }
+    }
+
+    #[test]
+    fn delete_rejects_traversal() {
+        let _g = env_guard();
+        let temp = tempdir();
+        unsafe {
+            std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
+        }
+        let err = delete("../../../tmp/x").unwrap_err();
+        assert!(matches!(
+            err,
+            SkillsMcpError::Skills(SkillsError::InvalidInput(_))
+                | SkillsMcpError::Skills(SkillsError::NotFound(_))
+        ));
+        unsafe {
+            std::env::remove_var(ROOTS_ENV);
+        }
+    }
+
+    #[test]
+    fn write_root_is_searchable() {
+        let _g = env_guard();
+        let temp = tempdir();
+        // Only the write-root env is set; the skill must still be listable.
+        unsafe {
+            std::env::set_var(WRITE_ROOT_ENV, temp.path().display().to_string());
+            std::env::remove_var(ROOTS_ENV);
+        }
+        let fm = SkillFrontmatter {
+            name: "in-write-root".into(),
+            description: "d".into(),
+            tags: vec![],
+        };
+        write_new("in-write-root", &fm, "body").expect("create in write root");
+        let names: Vec<String> = list_all().into_iter().map(|s| s.name).collect();
+        assert!(
+            names.contains(&"in-write-root".to_string()),
+            "skill created in write-root should appear in list_all: {names:?}"
+        );
+        unsafe {
+            std::env::remove_var(WRITE_ROOT_ENV);
+        }
+    }
+
+    #[test]
+    fn summary_view_omits_paths_by_default() {
+        let s = SkillSummary {
+            name: "n".into(),
+            description: "d".into(),
+            tags: vec!["t".into()],
+            path: "/secret/n/SKILL.md".into(),
+            root: "/secret".into(),
+            attachments: vec![],
+        };
+        let default = s.to_view(false);
+        assert!(default.get("path").is_none());
+        assert!(default.get("root").is_none());
+        assert_eq!(default["name"], "n");
+
+        let with_paths = s.to_view(true);
+        assert_eq!(with_paths["path"], "/secret/n/SKILL.md");
+        assert_eq!(with_paths["root"], "/secret");
+    }
 
     #[test]
     fn parse_full_frontmatter() {
@@ -477,6 +717,7 @@ mod tests {
 
     #[test]
     fn write_and_read_round_trip() {
+        let _g = env_guard();
         let temp = tempdir();
         unsafe {
             std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
