@@ -29,14 +29,19 @@ impl McpServer {
         protocol_version: &str,
         _client_capabilities: &Value,
     ) -> Result<Value> {
-        if protocol_version != "2024-11-05"
-            && protocol_version != "2025-06-18"
-            && protocol_version != "2025-11-25"
-        {
+        // Accept the MCP revisions clients in the wild actually send.
+        // 2025-03-26 is the version current Claude Code negotiates.
+        const SUPPORTED_VERSIONS: &[&str] =
+            &["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+        if !SUPPORTED_VERSIONS.contains(&protocol_version) {
             return Err(McpError::InvalidProtocolVersion(protocol_version.to_string()).into());
         }
 
-        let tools = self.tool_registry.list_tools();
+        // Mark initialized here too: some clients call tools/list immediately
+        // after a successful initialize without first sending the separate
+        // `notifications/initialized` notification.
+        *self.initialized.write().await = true;
+
         Ok(serde_json::json!({
             "protocolVersion": protocol_version,
             "serverInfo": {
@@ -48,7 +53,6 @@ impl McpServer {
                     "listChanged": false,
                 },
             },
-            "tools": tools,
         }))
     }
 
