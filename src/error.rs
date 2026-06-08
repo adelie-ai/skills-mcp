@@ -1,92 +1,61 @@
 #![deny(warnings)]
 
-// Error types for skills-mcp
+// Error types for skills-mcp (domain errors only; protocol/transport errors
+// are handled by mcp-core)
 
 use thiserror::Error;
 
-/// Top-level error type for skills-mcp
+/// Top-level error type for skills-mcp.
 #[derive(Error, Debug)]
 pub enum SkillsMcpError {
-    /// Skills operation errors
+    /// Skills domain operation errors.
     #[error("Skills error: {0}")]
     Skills(#[from] SkillsError),
 
-    /// JSON serialization/deserialization errors
+    /// JSON serialization/deserialization errors.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    /// MCP protocol errors
-    #[error("MCP protocol error: {0}")]
+    /// Tool dispatch errors (unknown tool name, bad parameters).
+    #[error("MCP tool error: {0}")]
     Mcp(#[from] McpError),
 
-    /// Transport layer errors
-    #[error("Transport error: {0}")]
-    Transport(#[from] TransportError),
-
-    /// IO errors
+    /// IO errors.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
 
-/// Skills domain errors
+/// Skills domain errors.
 #[derive(Error, Debug)]
 pub enum SkillsError {
-    /// Skill not found
+    /// Skill not found.
     #[error("Skill not found: {0}")]
     NotFound(String),
 
-    /// A skill with this name already exists
+    /// A skill with this name already exists.
     #[error("Skill already exists: {0}")]
     AlreadyExists(String),
 
-    /// Invalid input data
+    /// Invalid input data.
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
-    /// Storage read/write failure
+    /// Storage read/write failure.
     #[error("Storage error: {0}")]
     StorageError(String),
 }
 
-/// MCP protocol errors
+/// Tool-dispatch errors (unknown tool, bad parameters).
 #[derive(Error, Debug)]
 pub enum McpError {
-    /// Unsupported protocol version
-    #[error("Unsupported protocol version: {0}")]
-    InvalidProtocolVersion(String),
-
-    /// Malformed JSON-RPC message
-    #[error("Invalid JSON-RPC message: {0}")]
-    InvalidJsonRpc(String),
-
-    /// Requested tool does not exist
+    /// Requested tool does not exist.
     #[error("Tool not found: {0}")]
     ToolNotFound(String),
 
-    /// Tool was called with bad parameters
+    /// Tool was called with bad parameters.
     #[error("Invalid tool parameters: {0}")]
     InvalidToolParameters(String),
 }
 
-/// Transport layer errors
-#[derive(Error, Debug)]
-pub enum TransportError {
-    /// WebSocket error
-    #[error("WebSocket error: {0}")]
-    WebSocket(String),
-
-    /// Malformed message
-    #[error("Invalid message format: {0}")]
-    InvalidMessage(String),
-
-    /// Connection was closed
-    #[error("Connection closed")]
-    ConnectionClosed,
-
-    /// Underlying IO error
-    #[error("Transport IO error: {0}")]
-    Io(#[from] std::io::Error),
-}
-
-/// Convenience Result alias
+/// Convenience `Result` alias.
 pub type Result<T> = std::result::Result<T, SkillsMcpError>;
