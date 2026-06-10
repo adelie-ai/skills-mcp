@@ -7,7 +7,7 @@ use crate::params::CreateSkillParams;
 use crate::repo::{self, SkillFrontmatter};
 use serde_json::Value;
 
-pub fn execute(args: &Value) -> Result<Value> {
+pub fn execute(args: &Value) -> Result<String> {
     let params: CreateSkillParams = serde_json::from_value(args.clone())
         .map_err(|e| McpError::InvalidToolParameters(e.to_string()))?;
     repo::validate_skill_name(&params.name)?;
@@ -20,11 +20,5 @@ pub fn execute(args: &Value) -> Result<Value> {
         tags: params.tags.unwrap_or_default(),
     };
     let detail = repo::write_new(&params.name, &fm, &params.content)?;
-    text_response(serde_json::to_string_pretty(&detail)?)
-}
-
-fn text_response(text: String) -> Result<Value> {
-    Ok(serde_json::json!({
-        "content": [{"type": "text", "text": text}],
-    }))
+    Ok(serde_json::to_string_pretty(&detail)?)
 }

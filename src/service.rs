@@ -74,25 +74,16 @@ impl McpService for SkillsService {
     }
 }
 
-/// Convert a domain `Result<Value>` (whose `Value` is already a
-/// `{"content":[...]}` object) into the mcp-core `ToolReply`.
+/// Convert a domain `Result<String>` (the operation's already-rendered reply
+/// text — pretty-printed JSON for most tools, a plain sentence for delete) into
+/// the mcp-core `ToolReply`, wrapping the success text exactly once.
 ///
-/// Domain errors become `isError` content (the model can react to them); JSON
-/// serialization failures become `CallError::Internal`.
-fn dispatch(result: crate::error::Result<Value>) -> Result<ToolReply, CallError> {
+/// Domain errors are classified onto `CallError`: invalid-parameter errors map
+/// to `InvalidParams`, JSON failures to `Internal`, and the remaining domain
+/// errors to `Tool` (surfaced as `isError` content the model can react to).
+fn dispatch(result: crate::error::Result<String>) -> Result<ToolReply, CallError> {
     match result {
-        Ok(v) => {
-            // The operation functions return a `{"content":[{"type":"text","text":...}]}`
-            // shape. Extract the text and hand it to mcp-core as a plain text reply.
-            let text = v
-                .get("content")
-                .and_then(|c| c.get(0))
-                .and_then(|b| b.get("text"))
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            Ok(ToolReply::text(text))
-        }
+        Ok(text) => Ok(ToolReply::text(text)),
         Err(e) => {
             // Classify the error so mcp-core can surface it correctly.
             match &e {
