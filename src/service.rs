@@ -27,9 +27,10 @@ impl McpService for SkillsService {
         vec![
             tool_def::<CreateSkillParams>(
                 "skills_create_skill",
-                "Create a new skill on disk as <root>/<name>/SKILL.md with YAML frontmatter \
-                 (name, description, optional tags) plus a markdown body. Writes to \
-                 ~/.agents/skills, creating it if missing.",
+                "Save a new skill - a reusable how-to guide or playbook an agent can load \
+                 later - as <name>/SKILL.md (YAML frontmatter: name, description, optional \
+                 tags; plus a markdown body). Stored under the write root \
+                 ($SKILLS_MCP_WRITE_ROOT, default ~/.agents/skills), created if missing.",
             ),
             tool_def::<GetSkillParams>(
                 "skills_get_skill",
@@ -54,9 +55,10 @@ impl McpService for SkillsService {
             ),
             tool_def::<SearchSkillsParams>(
                 "skills_search_skills",
-                "Case-insensitive full-text search across skill names, descriptions, tags, \
-                 and SKILL.md bodies. Optionally restrict to skills carrying at least one \
-                 of the supplied tags.",
+                "Find stored skills matching a keyword or phrase. Case-insensitive search \
+                 across every skill's name, description, tags, and SKILL.md body; optionally \
+                 restrict to skills carrying at least one of the supplied tags. Use this to \
+                 check whether a relevant skill already exists before creating one.",
             ),
         ]
     }

@@ -40,7 +40,10 @@ fn search_skills_description_leads_with_find() {
 fn create_skill_description_leads_with_save() {
     let d = description_of("skills_create_skill");
     let lower = d.to_lowercase();
-    assert!(lower.starts_with("save"), "create should lead with 'Save': {d}");
+    assert!(
+        lower.starts_with("save"),
+        "create should lead with 'Save': {d}"
+    );
     assert!(
         lower.contains("how-to") || lower.contains("playbook"),
         "create should use how-to/playbook vocabulary: {d}"
