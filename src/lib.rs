@@ -33,3 +33,18 @@ pub fn server_config() -> ServerConfig {
         )
         .without_websocket()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mcp_core::McpService;
+
+    #[test]
+    fn build_service_exposes_tools() {
+        let svc = build_service();
+        assert!(
+            !svc.tools().is_empty(),
+            "skills build_service() must expose at least one tool"
+        );
+    }
+}
