@@ -11,6 +11,14 @@ pub mod service;
 
 use mcp_core::ServerConfig;
 
+pub use service::SkillsService;
+
+/// Construct the skills service with built-in defaults, for in-process (compiled-in) hosting.
+/// Root directories are resolved lazily per call from SKILLS_MCP_ROOTS / SKILLS_MCP_WRITE_ROOT.
+pub fn build_service() -> SkillsService {
+    SkillsService
+}
+
 /// Build the [`ServerConfig`] for skills-mcp: server identity plus the
 /// model-facing `instructions` blurb emitted in the MCP `initialize` response.
 ///
@@ -32,4 +40,19 @@ pub fn server_config() -> ServerConfig {
              $SKILLS_MCP_WRITE_ROOT (default ~/.agents/skills).",
         )
         .without_websocket()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mcp_core::McpService;
+
+    #[test]
+    fn build_service_exposes_tools() {
+        let svc = build_service();
+        assert!(
+            !svc.tools().is_empty(),
+            "skills build_service() must expose at least one tool"
+        );
+    }
 }
