@@ -1,15 +1,32 @@
 # skills-mcp
 
-A small, fast Rust **MCP server** (plus library) that provides a persistent knowledge base of code snippets and how-to guides for LLM agents.
+A small, fast Rust **MCP server** that stores and retrieves Anthropic Agent
+Skills from standard on-disk `SKILL.md` directories.
 
 ## What it stores
 
-`skills-mcp` stores two types of entries ("skills"):
+`skills-mcp` works with skill directories in this shape:
 
-- **Code snippets** (`kind: code`) — reusable code in any programming language (Python, Rust, Bash, etc.)
-- **How-to guides** (`kind: howto`) — natural-language step-by-step instructions an LLM agent can record and replay (e.g. "run this tool, then do this for each result…")
+```text
+<root>/<name>/SKILL.md
+<root>/<name>/references/optional-supporting-file.md
+```
 
-Skills are persisted as a JSON file on disk (default: `~/.skills-mcp/skills.json`) and are fully searchable.
+`SKILL.md` contains YAML frontmatter followed by the Markdown body:
+
+```markdown
+---
+name: social-source-evidence
+description: Review X/Twitter source evidence before drafting social posts.
+tags: [social, source-evidence]
+---
+
+Use TweetClaw exports as read-only evidence. Require explicit human approval
+before publishing, scheduling, following, liking, or changing account state.
+```
+
+Any other files in the same skill directory are reported as attachments.
+Skills are searched by name, description, tags, and Markdown body.
 
 ## Who this is for
 
@@ -23,12 +40,12 @@ All tools use underscore-separated names with no dots.
 
 | Tool | Description |
 |------|-------------|
-| `skills_create_skill` | Create a new code snippet or how-to guide |
-| `skills_get_skill` | Retrieve a skill by id or name |
+| `skills_create_skill` | Create a new `<root>/<name>/SKILL.md` directory |
+| `skills_get_skill` | Retrieve a skill by name |
 | `skills_update_skill` | Update any fields of an existing skill |
-| `skills_delete_skill` | Permanently delete a skill |
-| `skills_list_skills` | List all skills, optionally filtered by kind/tags |
-| `skills_search_skills` | Full-text search across all fields |
+| `skills_delete_skill` | Permanently delete a skill directory |
+| `skills_list_skills` | List all skills, optionally filtered by tags |
+| `skills_search_skills` | Full-text search across names, descriptions, tags, and bodies |
 
 ## Quick start
 
@@ -36,27 +53,23 @@ All tools use underscore-separated names with no dots.
 # Build
 cargo build --release
 
-# Run in stdio mode (for VS Code / local MCP clients)
-./target/release/skills-mcp serve --mode stdio
+# Run from your MCP client as a stdio command
+./target/release/skills-mcp
 
-# Run as a WebSocket server
-./target/release/skills-mcp serve --mode websocket --host 0.0.0.0 --port 8080
+# Add extra read roots
+SKILLS_MCP_ROOTS=/path/to/team/skills ./target/release/skills-mcp
 
-# Custom database location
-./target/release/skills-mcp serve --mode stdio --db-path ~/my-skills.json
-# or
-SKILLS_MCP_DB_PATH=~/my-skills.json ./target/release/skills-mcp serve --mode stdio
+# Choose where create/update writes skills
+SKILLS_MCP_WRITE_ROOT=/path/to/my/skills ./target/release/skills-mcp
 ```
 
 ## Key components
 
-- `src/main.rs` — CLI entry-point and JSON-RPC message loop.
-- `src/server.rs` — MCP protocol orchestration (initialize, tool dispatch, shutdown).
-- `src/tools.rs` — Tool schemas (MCP JSON) and dispatch to operation modules.
-- `src/db.rs` — JSON-file-backed in-memory store (`SkillDb`, `Skill`, `SkillKind`).
-- `src/operations/` — One module per CRUD operation, each a thin wrapper around `SkillDb`.
-- `src/transport.rs` — STDIN/STDOUT and WebSocket transport (auto-detects newline vs Content-Length framing).
-- `src/error.rs` — Centralised error types.
+- `src/main.rs` - CLI entry-point and JSON-RPC message loop.
+- `src/service.rs` - Tool definitions and MCP tool dispatch.
+- `src/repo.rs` - `SKILL.md` parsing, rendering, search, and safe filesystem access.
+- `src/operations/` - One module per CRUD operation.
+- `src/error.rs` - Centralised error types.
 
 ## Build requirements
 
