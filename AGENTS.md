@@ -66,10 +66,15 @@ rule the base does not have.
 
 ### 3.1 The gate for this repo (addition)
 
-The `adelie-ai` repos have no CI. The gate is local and the author runs it: `just check`.
-Run `just install-hooks` once per clone to put the same gate on pre-push. Warnings are
-denied mechanically by the `[lints]` table in `Cargo.toml`, so `cargo build`, `cargo test`,
-and `cargo clippy` each hard-fail on a warning.
+The `adelie-ai` repos have no CI. The gate is local and the author runs it:
+
+- `just check` - format, clippy, build and test with default features.
+- `just check-otel` - clippy, build and test with the `otel` feature.
+- `just check-all` - both. This is what the pre-push hook runs; wire it with
+  `just install-hooks`.
+
+Warnings are denied mechanically by the `[lints]` table in `Cargo.toml`, so `cargo build`,
+`cargo test`, and `cargo clippy` each hard-fail on a warning, in both configurations.
 
 ### 4.3 Branch and pull request - merge when green (override, weaker than the base)
 
