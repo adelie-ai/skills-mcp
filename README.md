@@ -30,6 +30,73 @@ All tools use underscore-separated names with no dots.
 | `skills_list_skills` | List all skills, optionally filtered by kind/tags |
 | `skills_search_skills` | Full-text search across all fields |
 
+## Logging
+
+skills-mcp gets its logging, tracing and metrics from `mcp-core`, which installs
+them through [adelie-telemetry](https://github.com/adelie-ai/adelie-telemetry).
+This section covers what is specific to this server; `mcp-core`'s own README
+has the full contract.
+
+### Where it goes, and how much
+
+**stderr, always.** This server speaks stdio, and the transport frames
+JSON-RPC on stdout, so a log line there would corrupt the protocol -- this
+holds even at `RUST_LOG=trace`.
+
+`RUST_LOG` sets the filter. Unset means `info`.
+
+```sh
+RUST_LOG=debug skills-mcp serve
+```
+
+### What may appear at each level
+
+| Level | Carries |
+|---|---|
+| INFO | ids, counts, durations, tool names, a skipped skill's own directory name. **Never a path.** |
+| DEBUG | tool arguments, and a skipped skill's full path and error detail. |
+
+`repo::list_all` skips a skill it cannot read (a missing frontmatter block, an
+unreadable file) instead of failing the whole listing. The skill's directory
+name is logged at WARN as an identifier, the same class of value as a tool
+name. The full path is not: it resolves through `~/.agents/skills` and
+`~/.claude/skills`, so it carries the operator's home directory, and the
+underlying error can quote a snippet of the file's own content on a parse
+failure. Both move to DEBUG instead. `skills.skipped_entries`, labelled by a
+bounded `reason` (`read_failed`, `invalid_frontmatter`, or `other`), counts
+these regardless of the log level -- see Metrics below.
+
+### Metrics
+
+`mcp-core`'s dispatch layer already records a tool-call counter and a latency
+histogram, by tool name and outcome, for every call this server handles; see
+`mcp-core`'s README for the full list. This server adds one metric of its own:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `skills.skipped_entries` | `reason` | A skill `list_all`/`search` could not read, by why. |
+
+### Exporting to a collector
+
+Off by default. Turn it on with the `otel` feature:
+
+```sh
+cargo build --features otel
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 ./target/debug/skills-mcp serve
+```
+
+With the feature off, no opentelemetry crate is resolved at all -- `cargo
+tree` on a default build shows none. With it on, traces, metrics and log
+records export over the standard `OTEL_EXPORTER_OTLP_*` / `OTEL_RESOURCE_*`
+environment variables; there are no server-specific flags or variables. See
+`mcp-core`'s README for the full variable list and
+[adelie-telemetry](https://github.com/adelie-ai/adelie-telemetry)'s for
+transport and TLS details.
+
+With no collector configured, the metrics registry still accumulates and
+still writes a periodic summary to stderr, so a plain `cargo install` build
+reports real numbers without any extra setup.
+
 ## Quick start
 
 ```bash

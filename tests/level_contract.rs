@@ -18,9 +18,17 @@ use tracing::Level;
 
 use support::capture;
 
-/// Serialises the tests in this file that mutate the process-global skill-root
-/// env vars, mirroring `src/repo.rs`'s own lock: they must not race any other
-/// test in this binary that touches the same variables.
+/// Serialises the tests in this file that mutate the process-global
+/// skill-root env vars, mirroring `src/repo.rs`'s own lock: they must not
+/// race any other test in this binary that touches the same variables.
+///
+/// This does double duty. `metrics::global()` is one registry shared by
+/// every test in this process, and the three env-guarded tests below all
+/// trigger the same `skills.skipped_entries` reason=read_failed series.
+/// Holding the guard across each test's whole before/after snapshot -- not
+/// just the env var calls -- is what keeps their counter deltas from
+/// interleaving. A future test that reads or increments that series needs
+/// this same guard, held for its whole body.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn env_guard() -> MutexGuard<'static, ()> {
