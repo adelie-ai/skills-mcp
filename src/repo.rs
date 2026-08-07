@@ -17,11 +17,13 @@
 // downstream consumers (e.g. Adelie's knowledge-base ingester) can find
 // supporting scripts/assets.
 
-use crate::error::{Result, SkillsError};
+use crate::error::{Result, SkillsError, SkillsMcpError};
+use mcp_core::telemetry::metrics::{self, Label};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::{debug, warn};
 
 /// File name used by every skill directory.
 pub const SKILL_FILE: &str = "SKILL.md";
@@ -166,6 +168,7 @@ pub fn default_write_root() -> PathBuf {
 
 /// List every skill across every configured root. Skills with a malformed
 /// frontmatter are skipped with a warning instead of failing the whole list.
+#[tracing::instrument(name = "skills.list_all", skip_all)]
 pub fn list_all() -> Vec<SkillSummary> {
     let mut out = Vec::new();
     for root in lookup_roots() {
@@ -180,14 +183,138 @@ pub fn list_all() -> Vec<SkillSummary> {
             }
             match read_summary(entry.path(), &root) {
                 Ok(s) => out.push(s),
-                Err(e) => {
-                    eprintln!("skills-mcp: skipping {}: {}", entry.path().display(), e);
-                }
+                Err(e) => record_skip(entry.path(), &e),
             }
         }
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// The most bytes a value this module did not choose keeps in a log field.
+/// Matches the cap mcp-core's own dispatch layer uses for a caller-supplied
+/// name, so a value reads the same length wherever an operator meets it.
+const MAX_LOG_FIELD_BYTES: usize = 128;
+
+/// What replaces a character that could make a log field render as something
+/// other than what it is.
+const LOG_FIELD_REPLACEMENT: char = '\u{fffd}';
+
+/// What marks a value the cap cut short.
+const LOG_FIELD_TRUNCATED: &str = "...";
+
+/// Log and count one entry `list_all` could not read as a skill, without
+/// letting the full path reach INFO.
+///
+/// The path carries the operator's home directory -- `lookup_roots` resolves
+/// `~/.agents/skills` and `~/.claude/skills` -- and on a parse failure the
+/// underlying error can quote a snippet of the file's own YAML. Both are
+/// content under the level contract (mcp-core#40 D10: "INFO carries ids,
+/// counts, durations... never content"), not an id or a count, so neither
+/// reaches the WARN. The directory name alone is different: it is the same
+/// kind of value as an MCP tool name, chosen by whoever created the skill,
+/// so it stays at WARN as an identifier. Decided here rather than only in
+/// the pull request, since the next person to touch this function needs the
+/// reason in front of them, not just the diff that applied it.
+///
+/// Nothing validated this directory name first -- a directory a person
+/// copied onto disk by hand, or synced from elsewhere, never passed
+/// [`validate_skill_name`] -- so every value here is rendered through
+/// [`safe_log_field`] before it reaches a field, the same treatment
+/// mcp-core's dispatch layer gives a caller-supplied tool name. Without it a
+/// crafted directory name could plant a newline and forge a second, fake log
+/// line.
+fn record_skip(skill_md_path: &Path, error: &SkillsMcpError) {
+    let reason = skip_reason(error);
+    let skill = skill_dir_name(skill_md_path);
+    warn!(
+        skill = %safe_log_field(skill),
+        reason,
+        "skipping skill entry: unreadable or malformed SKILL.md"
+    );
+    debug!(
+        path = %safe_log_field(&skill_md_path.display().to_string()),
+        error = %safe_log_field(&error.to_string()),
+        "skipped skill entry detail"
+    );
+    metrics::increment("skills.skipped_entries", &[Label::new("reason", reason)]);
+}
+
+/// Classify why `read_summary` failed, as a small fixed vocabulary so the
+/// `skills.skipped_entries` counter's `reason` label stays bounded.
+///
+/// mcp-core#40: "reason is a bounded label; a skill name from a directory
+/// scan is not -- the registry caps at 64 values per metric, first-come,
+/// with no eviction". The directory name never reaches this function's
+/// return value; only one of these three fixed strings does.
+fn skip_reason(error: &SkillsMcpError) -> &'static str {
+    match error {
+        SkillsMcpError::Skills(SkillsError::StorageError(_)) => "read_failed",
+        SkillsMcpError::Skills(SkillsError::InvalidInput(_)) => "invalid_frontmatter",
+        SkillsMcpError::Skills(_)
+        | SkillsMcpError::Json(_)
+        | SkillsMcpError::Mcp(_)
+        | SkillsMcpError::Io(_) => "other",
+    }
+}
+
+/// The directory name one level above `skill_md_path`, or a fixed
+/// placeholder when the path is too short to have one. Used only for the
+/// WARN identifier; the DEBUG line carries the whole path instead.
+fn skill_dir_name(skill_md_path: &Path) -> &str {
+    skill_md_path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|n| n.to_str())
+        .unwrap_or("<unknown>")
+}
+
+/// Render a value this module did not choose into a log field safely.
+///
+/// Two problems, and neither is about which *level* a value belongs at --
+/// [`skip_reason`] and [`record_skip`]'s doc comment decide that. A control
+/// character or a Unicode bidi override in a value survives into whatever
+/// reads the log; a newline in particular renders as a second line with its
+/// own timestamp and level, which is how a crafted directory name could
+/// forge a fake log entry. Length is the other problem: nothing bounds a
+/// filesystem name or an error message short of the filesystem itself.
+fn safe_log_field(value: &str) -> String {
+    let mut out = String::with_capacity(value.len().min(MAX_LOG_FIELD_BYTES));
+    let mut written = 0;
+    for ch in value.chars() {
+        let ch = if is_deceptive(ch) {
+            LOG_FIELD_REPLACEMENT
+        } else {
+            ch
+        };
+        let len = ch.len_utf8();
+        if written + len > MAX_LOG_FIELD_BYTES {
+            out.push_str(LOG_FIELD_TRUNCATED);
+            break;
+        }
+        out.push(ch);
+        written += len;
+    }
+    out
+}
+
+/// Whether this character could make a log field display as something other
+/// than what it is: the C0/C1/DEL controls that end a line or drive a
+/// terminal, the two Unicode line/paragraph separators some log readers
+/// treat as a line break, and the bidi override characters that reverse how
+/// a value is displayed without changing its bytes.
+fn is_deceptive(ch: char) -> bool {
+    ch.is_control()
+        || matches!(
+            ch,
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// Locate a skill by name across all configured roots. Returns the first match.
@@ -209,6 +336,7 @@ pub fn find(name: &str) -> Option<(PathBuf, PathBuf)> {
 }
 
 /// Read a full skill (frontmatter + body + attachments) by name.
+#[tracing::instrument(name = "skills.read", skip_all)]
 pub fn read(name: &str) -> Result<SkillDetail> {
     let (path, root) = find(name).ok_or_else(|| SkillsError::NotFound(name.to_string()))?;
     let raw = fs::read_to_string(&path).map_err(|e| {
@@ -244,6 +372,7 @@ fn read_summary(path: &Path, root: &Path) -> Result<SkillSummary> {
 
 /// Write a new skill. Errors if a skill with the same name already exists
 /// in any configured root.
+#[tracing::instrument(name = "skills.write_new", skip_all)]
 pub fn write_new(name: &str, fm: &SkillFrontmatter, body: &str) -> Result<SkillDetail> {
     validate_skill_name(name)?;
     let name = name.trim();
@@ -287,6 +416,7 @@ pub fn write_new(name: &str, fm: &SkillFrontmatter, body: &str) -> Result<SkillD
 
 /// Overwrite an existing skill in place. Only fields set in `patch` are
 /// changed; the rest are read from disk.
+#[tracing::instrument(name = "skills.write_update", skip_all)]
 pub fn write_update(name: &str, patch: UpdatePatch) -> Result<SkillDetail> {
     let current = read(name)?;
     let new_name = match patch.name {
@@ -353,6 +483,7 @@ pub struct UpdatePatch {
 
 /// Delete a skill directory recursively. Returns the deleted skill's
 /// summary so the caller can confirm what was removed.
+#[tracing::instrument(name = "skills.delete", skip_all)]
 pub fn delete(name: &str) -> Result<SkillSummary> {
     validate_skill_name(name)?;
     let (path, root) = find(name).ok_or_else(|| SkillsError::NotFound(name.to_string()))?;
@@ -367,6 +498,7 @@ pub fn delete(name: &str) -> Result<SkillSummary> {
 }
 
 /// Full-text search across name / description / tags / body.
+#[tracing::instrument(name = "skills.search", skip_all)]
 pub fn search(query: &str, required_tags: &[String]) -> Vec<SkillSummary> {
     let needle = query.to_lowercase();
     let mut out = Vec::new();

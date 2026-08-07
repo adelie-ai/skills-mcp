@@ -137,7 +137,10 @@ fn no_info_or_above_event_carries_the_skipped_entry_path() {
 
     let at_debug = recorded.events.iter().any(|event| {
         event.level == Level::DEBUG
-            && event.fields.values().any(|value| value.contains(SENTINEL_HOME))
+            && event
+                .fields
+                .values()
+                .any(|value| value.contains(SENTINEL_HOME))
     });
     assert!(
         at_debug,
