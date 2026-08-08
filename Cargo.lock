@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "adelie-telemetry"
 version = "0.1.0"
-source = "git+https://github.com/adelie-ai/adelie-telemetry?rev=1b8166ab483174e76aa23079858b8a31aaa52ae1#1b8166ab483174e76aa23079858b8a31aaa52ae1"
+source = "git+https://github.com/adelie-ai/adelie-telemetry?rev=5c762eca14e43295dd27c5d5adaa658924f5f133#5c762eca14e43295dd27c5d5adaa658924f5f133"
 dependencies = [
  "opentelemetry",
  "opentelemetry-appender-tracing",
@@ -888,16 +888,19 @@ dependencies = [
 [[package]]
 name = "mcp-core"
 version = "0.1.0"
-source = "git+https://github.com/adelie-ai/mcp-core#ecf1e419393e0d4511fa0d73e37e096d6bde57d7"
+source = "git+https://github.com/adelie-ai/mcp-core#188b22c5459a3e76f8dcd7a206bbff78df7643a2"
 dependencies = [
  "adelie-telemetry",
  "async-trait",
  "clap",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
 ]
 
 [[package]]
