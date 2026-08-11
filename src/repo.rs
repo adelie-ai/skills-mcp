@@ -74,8 +74,8 @@ pub struct SkillFrontmatter {
 /// One skill as `list_all` and `search` report it: the frontmatter, the
 /// attachment names, and where the skill sits on disk.
 ///
-/// `path` and `root` are absolute. Under the default roots they contain the
-/// operator's home directory, so [`Self::to_view`] keeps both out of the
+/// `path` and `root` say where the skill sits on this host. Under the roots
+/// this server documents, they contain the operator's home directory, so [`Self::to_view`] keeps both out of the
 /// model-facing reply unless the caller sets `include_paths`. That is a
 /// decision, not an oversight, and it is narrower than "never send a path":
 /// [`SkillDetail`] always reports its path. An agent that reads a skill but
@@ -98,7 +98,7 @@ pub struct SkillSummary {
 }
 
 impl SkillSummary {
-    /// Render this summary for an LLM-facing list/search response. The absolute
+    /// Render this summary for an LLM-facing list/search response. The on-disk
     /// `path`/`root` fields are omitted unless `include_paths` is set, to save
     /// tokens and avoid leaking the host filesystem layout.
     pub fn to_view(&self, include_paths: bool) -> serde_json::Value {
@@ -117,10 +117,14 @@ impl SkillSummary {
 }
 
 /// One skill in full: the frontmatter, the markdown body, the attachment
-/// names, and the absolute path of its `SKILL.md`.
+/// names, and the on-disk path of its `SKILL.md`.
 ///
-/// This view always reports the path. See [`SkillSummary`] for why the list
-/// and search views hide it and this one does not.
+/// This view always reports `path` and `root`. See [`SkillSummary`] for why
+/// the list and search views hide both and this one does not. `root` rides
+/// along with `path` rather than on its own argument: every constructor
+/// builds `path` as `root/<name>/SKILL.md`, so a reply that shows the path
+/// and hides the root conceals nothing, and the root still tells a caller
+/// which of several configured roots holds this skill.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct SkillDetail {
     pub name: String,

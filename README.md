@@ -15,7 +15,8 @@ It owns:
 
 - Discovery of the skill roots, and of the skill directories in them.
 - The `SKILL.md` format: YAML frontmatter plus a markdown body.
-- The six `skills_*` tools and the JSON they return.
+- The six `skills_*` tools and the replies they return: pretty-printed JSON
+  from five of them, and one plain sentence from `skills_delete_skill`.
 - Name validation, so a tool call cannot reach a path outside a configured root.
 
 It does not own these concerns, and refuses them:
@@ -54,9 +55,13 @@ tags: [release, checklist]
 2. Tag the commit.
 ```
 
-`name` and `description` are required, `tags` is optional. `name` must equal the
-directory name, and must be one path component: no `/`, no `\`, and not `.` or
-`..`.
+`name` and `description` are required, `tags` is optional. `name` must be one
+path component: no `/`, no `\`, and not `.` or `..`.
+
+Every tool addresses a skill by its directory name. This server writes the
+frontmatter `name` and the directory name the same, and it does not check a file
+it did not write. Where the two differ, a listing reports the frontmatter `name`
+while `skills_get_skill` still needs the directory name.
 
 Every other file in the skill directory is reported as an attachment, named by
 its path relative to that directory (`scripts/run.py`). The server lists the
@@ -97,8 +102,8 @@ example when a package manager owns `~/.agents/skills`.
 | `skills_list_skills` | List every skill in every root. Filter with `tags`. |
 | `skills_search_skills` | Case-insensitive substring search of name, description, tags and body. Filter with `tags`. |
 
-`skills_list_skills` and `skills_search_skills` leave the absolute `path` and
-`root` out of each result, to save tokens and to keep the host layout out of the
+`skills_list_skills` and `skills_search_skills` leave the `path` and `root`
+fields out of each result, to save tokens and to keep the host layout out of the
 model's context. Pass `include_paths: true` to get both fields back.
 `skills_get_skill` always reports the path, because an agent opens an attachment
 by path.
