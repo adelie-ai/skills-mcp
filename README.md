@@ -88,9 +88,10 @@ Two roots can hold the same directory name, and the tools then disagree about
 it. `skills_get_skill`, `skills_update_skill` and `skills_delete_skill` take the
 first match in the order above, so an entry in `$SKILLS_MCP_ROOTS` shadows a
 skill of the same name in `~/.agents/skills`. `skills_list_skills` and
-`skills_search_skills` do not deduplicate: they report both copies under the same
-name, and with the default `include_paths: false` nothing tells the two entries
-apart. Only the first is reachable by name. Keep skill names unique across roots.
+`skills_search_skills` do not deduplicate: they report both copies under the
+same name, and with the default `include_paths: false` nothing says which root
+each came from. Only the first is reachable by name. Keep skill names unique
+across roots.
 
 `skills_create_skill` writes to one root only: `$SKILLS_MCP_WRITE_ROOT`, or
 `~/.agents/skills` when that variable is not set. It creates the root if it is
@@ -100,8 +101,9 @@ example when a package manager owns `~/.agents/skills`.
 The write root does not protect the other roots. `skills_update_skill` and
 `skills_delete_skill` find the skill by name across every root in the table
 above, then act on whichever root holds the match. A delete removes that whole
-skill directory. Configure a root only if you accept that a caller can change
-and remove what is in it.
+skill directory. This holds for every root in the table, the two defaults
+included, and nobody configures those. Treat any root this server reads as one
+a caller can also change and empty.
 
 ## MCP tools
 
@@ -121,11 +123,12 @@ model's context. Pass `include_paths: true` to get both fields back.
 by path.
 
 The body half of `skills_search_skills` has a limit. The tool matches the name,
-the description and the tags from the listing, then re-reads each skill by name
-to search its body, and that second read resolves the directory name. So it never
-searches the body of a skill whose frontmatter name differs from its directory
-name, and where two roots hold the same directory name it searches the first
-root's body for both copies. The name, description and tag match is not affected.
+the description and the tags from the listing, then re-reads any skill that pass
+did not match, by name, to search its body. That second read resolves the
+directory name. So it never searches the body of a skill whose frontmatter name
+differs from its directory name, and where two roots hold the same directory
+name it searches the first root's body for both copies. The name, description
+and tag match is not affected.
 
 ## Logging
 
