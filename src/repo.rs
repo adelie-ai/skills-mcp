@@ -71,6 +71,19 @@ pub struct SkillFrontmatter {
     pub tags: Vec<String>,
 }
 
+/// One skill as `list_all` and `search` report it: the frontmatter, the
+/// attachment names, and where the skill sits on disk.
+///
+/// `path` and `root` are absolute. Under the default roots they contain the
+/// operator's home directory, so [`Self::to_view`] keeps both out of the
+/// model-facing reply unless the caller sets `include_paths`. That is a
+/// decision, not an oversight, and it is narrower than "never send a path":
+/// [`SkillDetail`] always reports its path. An agent that reads a skill but
+/// gets no path cannot open the `scripts/run.py` the skill tells it to run.
+/// A summary answers "what exists", and needs no path to do it. A detail
+/// answers "how do I do this", and does. `skills_delete_skill` names the
+/// root it deleted from for the same reason: with several roots configured,
+/// the name alone does not say which copy went.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct SkillSummary {
     pub name: String,
@@ -103,6 +116,11 @@ impl SkillSummary {
     }
 }
 
+/// One skill in full: the frontmatter, the markdown body, the attachment
+/// names, and the absolute path of its `SKILL.md`.
+///
+/// This view always reports the path. See [`SkillSummary`] for why the list
+/// and search views hide it and this one does not.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct SkillDetail {
     pub name: String,
