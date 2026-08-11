@@ -13,7 +13,7 @@ pub struct ListSkillsParams {
     /// If provided, return only skills whose frontmatter tags include at least one of these.
     #[serde(default)]
     pub tags: Option<Vec<String>>,
-    /// Include the absolute on-disk `path`/`root` fields in the result. Off by
+    /// Include the on-disk `path`/`root` fields in the result. Off by
     /// default to save tokens and avoid leaking the filesystem layout.
     #[serde(default)]
     pub include_paths: bool,
@@ -74,7 +74,7 @@ pub struct SearchSkillsParams {
     /// If provided, restrict matches to skills that have at least one of these tags.
     #[serde(default)]
     pub tags: Option<Vec<String>>,
-    /// Include the absolute on-disk `path`/`root` fields in each result. Off by
+    /// Include the on-disk `path`/`root` fields in each result. Off by
     /// default to save tokens and avoid leaking the filesystem layout.
     #[serde(default)]
     pub include_paths: bool,

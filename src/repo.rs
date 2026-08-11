@@ -75,9 +75,10 @@ pub struct SkillFrontmatter {
 /// attachment names, and where the skill sits on disk.
 ///
 /// `path` and `root` say where the skill sits on this host. Under the roots
-/// this server documents, they contain the operator's home directory, so [`Self::to_view`] keeps both out of the
-/// model-facing reply unless the caller sets `include_paths`. That is a
-/// decision, not an oversight, and it is narrower than "never send a path":
+/// this server documents, they contain the operator's home directory, so
+/// [`Self::to_view`] keeps both out of the model-facing reply unless the
+/// caller sets `include_paths`.
+///
 /// [`SkillDetail`] always reports its path. An agent that reads a skill but
 /// gets no path cannot open the `scripts/run.py` the skill tells it to run.
 /// A summary answers "what exists", and needs no path to do it. A detail
@@ -89,9 +90,9 @@ pub struct SkillSummary {
     pub name: String,
     pub description: String,
     pub tags: Vec<String>,
-    /// Absolute path to SKILL.md.
+    /// Path to SKILL.md. Absolute only when the root it came from is.
     pub path: String,
-    /// Absolute path to the root that contains this skill.
+    /// Path to the root that holds this skill, as that root was configured.
     pub root: String,
     /// Names of additional files in the skill directory (relative to the directory).
     pub attachments: Vec<String>,
