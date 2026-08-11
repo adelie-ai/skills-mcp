@@ -36,7 +36,7 @@ impl McpService for SkillsService {
                 "skills_get_skill",
                 "Read a skill by name. Searches all configured roots (~/.agents/skills, \
                  ~/.claude/skills, and any in $SKILLS_MCP_ROOTS) and returns the parsed \
-                 frontmatter, body, absolute path, and a list of attachment filenames in \
+                 frontmatter, body, on-disk path, and a list of attachment filenames in \
                  the skill directory.",
             ),
             tool_def::<UpdateSkillParams>(

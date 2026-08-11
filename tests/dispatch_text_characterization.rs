@@ -152,6 +152,32 @@ async fn dispatch_text_is_characterized_for_every_tool() {
         serde_json::to_string_pretty(&expected_views).unwrap()
     );
 
+    // -- `include_paths: true` is the opt-in that puts the on-disk fields back.
+    // The default-off case is pinned above through `to_view(false)`. This pins
+    // the other half: that the flag actually reaches the view, through the
+    // params struct and the operation, and not only through `to_view` called
+    // directly.
+    let expected_path = root.join("alpha").join("SKILL.md").display().to_string();
+    for (tool, args) in [
+        ("skills_list_skills", json!({"include_paths": true})),
+        (
+            "skills_search_skills",
+            json!({"query": "alpha", "include_paths": true}),
+        ),
+    ] {
+        let text = reply_text(&svc.call_tool(tool, &args).await.expect("opt-in call"));
+        let views: Vec<Value> = serde_json::from_str(&text).expect("reply is a JSON array");
+        assert_eq!(views.len(), 1, "{tool} must return the one skill");
+        assert_eq!(
+            views[0]["path"], expected_path,
+            "{tool} with include_paths: true must report `path`"
+        );
+        assert_eq!(
+            views[0]["root"], root_str,
+            "{tool} with include_paths: true must report `root`"
+        );
+    }
+
     // -- skills_delete_skill: a fixed human-readable sentence, not JSON.
     let deleted_root = summaries[0].root.clone();
     let delete_text = reply_text(
