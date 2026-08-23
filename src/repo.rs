@@ -693,11 +693,15 @@ mod tests {
     fn find_rejects_traversal() {
         let _g = env_guard();
         let temp = tempdir();
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
         }
         assert!(find("../../../tmp/x").is_none());
         assert!(find("/etc/motd").is_none());
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::remove_var(ROOTS_ENV);
         }
@@ -707,6 +711,8 @@ mod tests {
     fn write_new_rejects_traversal() {
         let _g = env_guard();
         let temp = tempdir();
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::set_var(WRITE_ROOT_ENV, temp.path().display().to_string());
             std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
@@ -723,6 +729,8 @@ mod tests {
         ));
         // Nothing escaped the configured root.
         assert!(!temp.path().parent().unwrap().join("escape").exists());
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::remove_var(WRITE_ROOT_ENV);
             std::env::remove_var(ROOTS_ENV);
@@ -733,6 +741,8 @@ mod tests {
     fn write_update_rejects_traversal_new_name() {
         let _g = env_guard();
         let temp = tempdir();
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::set_var(WRITE_ROOT_ENV, temp.path().display().to_string());
             std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
@@ -757,6 +767,8 @@ mod tests {
             err,
             SkillsMcpError::Skills(SkillsError::InvalidInput(_))
         ));
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::remove_var(WRITE_ROOT_ENV);
             std::env::remove_var(ROOTS_ENV);
@@ -767,6 +779,8 @@ mod tests {
     fn delete_rejects_traversal() {
         let _g = env_guard();
         let temp = tempdir();
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
         }
@@ -776,6 +790,8 @@ mod tests {
             SkillsMcpError::Skills(SkillsError::InvalidInput(_))
                 | SkillsMcpError::Skills(SkillsError::NotFound(_))
         ));
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::remove_var(ROOTS_ENV);
         }
@@ -786,6 +802,8 @@ mod tests {
         let _g = env_guard();
         let temp = tempdir();
         // Only the write-root env is set; the skill must still be listable.
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::set_var(WRITE_ROOT_ENV, temp.path().display().to_string());
             std::env::remove_var(ROOTS_ENV);
@@ -801,6 +819,8 @@ mod tests {
             names.contains(&"in-write-root".to_string()),
             "skill created in write-root should appear in list_all: {names:?}"
         );
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::remove_var(WRITE_ROOT_ENV);
         }
@@ -874,6 +894,8 @@ mod tests {
     fn write_and_read_round_trip() {
         let _g = env_guard();
         let temp = tempdir();
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::set_var(ROOTS_ENV, temp.path().display().to_string());
         }
@@ -894,6 +916,8 @@ mod tests {
         assert_eq!(got.description, "demo desc");
         assert_eq!(got.content.trim(), "body");
 
+        // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+        // serializing this test's environment mutation against all other tests.
         unsafe {
             std::env::remove_var(ROOTS_ENV);
         }
