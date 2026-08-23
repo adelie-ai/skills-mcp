@@ -63,6 +63,8 @@ fn skipped_entry_reason_reaches_warn_without_the_path() {
     let _guard = env_guard();
     let temp = tempdir();
     let root = root_with_unreadable_entry(&temp.path);
+    // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+    // serializing this test's environment mutation against all other tests.
     unsafe {
         std::env::set_var(repo::ROOTS_ENV, root.display().to_string());
     }
@@ -71,6 +73,8 @@ fn skipped_entry_reason_reaches_warn_without_the_path() {
         repo::list_all();
     });
 
+    // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+    // serializing this test's environment mutation against all other tests.
     unsafe {
         std::env::remove_var(repo::ROOTS_ENV);
     }
@@ -119,6 +123,8 @@ fn no_info_or_above_event_carries_the_skipped_entry_path() {
     let _guard = env_guard();
     let temp = tempdir();
     let root = root_with_unreadable_entry(&temp.path);
+    // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+    // serializing this test's environment mutation against all other tests.
     unsafe {
         std::env::set_var(repo::ROOTS_ENV, root.display().to_string());
     }
@@ -127,6 +133,8 @@ fn no_info_or_above_event_carries_the_skipped_entry_path() {
         repo::list_all();
     });
 
+    // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+    // serializing this test's environment mutation against all other tests.
     unsafe {
         std::env::remove_var(repo::ROOTS_ENV);
     }
@@ -166,6 +174,8 @@ fn skipped_entries_are_counted_by_a_bounded_reason_label() {
     let _guard = env_guard();
     let temp = tempdir();
     let root = root_with_unreadable_entry(&temp.path);
+    // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+    // serializing this test's environment mutation against all other tests.
     unsafe {
         std::env::set_var(repo::ROOTS_ENV, root.display().to_string());
     }
@@ -177,6 +187,8 @@ fn skipped_entries_are_counted_by_a_bounded_reason_label() {
 
     let after = counter_total("skills.skipped_entries", &labels);
 
+    // SAFETY: The env_guard() mutex is held across the entire set/restore span,
+    // serializing this test's environment mutation against all other tests.
     unsafe {
         std::env::remove_var(repo::ROOTS_ENV);
     }

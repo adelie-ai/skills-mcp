@@ -44,6 +44,8 @@ async fn dispatch_text_is_characterized_for_every_tool() {
     let root = temp.path.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let root_str = root.display().to_string();
+    // SAFETY: This is the only test in this binary, so nothing else reads or
+    // writes the process environment concurrently.
     unsafe {
         std::env::set_var("HOME", temp.path.display().to_string());
         std::env::set_var(repo::ROOTS_ENV, &root_str);
