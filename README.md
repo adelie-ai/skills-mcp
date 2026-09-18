@@ -105,6 +105,12 @@ skill directory. This holds for every root in the table, the two defaults
 included, and nobody configures those. Treat any root this server reads as one
 a caller can also change and empty.
 
+Set `SKILLS_MCP_READ_ONLY=1` (also `true`/`yes`) to hide `skills_create_skill`,
+`skills_update_skill`, and `skills_delete_skill` from the tool list and reject
+calls to them as unknown tools, so the server only ever reads. Use it when
+pointing the server at skill roots no caller may change — for example a shared
+checkout whose writes belong to version control, not to agents.
+
 ## MCP tools
 
 | Tool | What it does |

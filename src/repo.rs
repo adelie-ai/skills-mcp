@@ -174,6 +174,25 @@ pub fn lookup_roots() -> Vec<PathBuf> {
 /// Environment variable that overrides where `skills_create_skill` writes.
 pub const WRITE_ROOT_ENV: &str = "SKILLS_MCP_WRITE_ROOT";
 
+/// Environment variable that hides the write tools (`skills_create_skill`,
+/// `skills_update_skill`, `skills_delete_skill`) from the tool list and
+/// rejects calls to them. Accepted truthy values: `1`, `true`, `yes`
+/// (case-insensitive).
+pub const READ_ONLY_ENV: &str = "SKILLS_MCP_READ_ONLY";
+
+/// Whether this server runs read-only: the write tools are hidden and
+/// rejected, so a client can be pointed at skill roots no caller may change.
+///
+/// Why an env flag instead of a CLI switch: every other server setting
+/// (`SKILLS_MCP_ROOTS`, `SKILLS_MCP_WRITE_ROOT`) is env-driven and resolved
+/// lazily per call, so managed launchers and test harnesses need no new
+/// argument plumbing.
+pub fn read_only() -> bool {
+    std::env::var(READ_ONLY_ENV)
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// Default root used when creating new skills. Created on demand by `write`.
 /// `$SKILLS_MCP_WRITE_ROOT` overrides the default; useful when
 /// `~/.agents/skills` is owned by a package-management tool and not
