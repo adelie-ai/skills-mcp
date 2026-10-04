@@ -17,6 +17,16 @@ use crate::params::{
 };
 use schemars::{JsonSchema, schema_for};
 
+/// Tool names that write to disk. Hidden from [`McpService::tools`] and
+/// rejected by [`McpService::call_tool`] while [`crate::repo::read_only`]
+/// holds, so a read-only client observes a server that only ever had the
+/// three read tools.
+const WRITE_TOOLS: [&str; 3] = [
+    "skills_create_skill",
+    "skills_update_skill",
+    "skills_delete_skill",
+];
+
 /// The skills-mcp McpService. Stateless — every call reads from / writes to
 /// disk directly via `crate::repo`.
 pub struct SkillsService;
@@ -24,7 +34,7 @@ pub struct SkillsService;
 #[async_trait]
 impl McpService for SkillsService {
     fn tools(&self) -> Vec<ToolDef> {
-        vec![
+        let mut tools = vec![
             tool_def::<CreateSkillParams>(
                 "skills_create_skill",
                 "Save a new skill - a reusable how-to guide or playbook an agent can load \
@@ -60,10 +70,20 @@ impl McpService for SkillsService {
                  restrict to skills carrying at least one of the supplied tags. Use this to \
                  check whether a relevant skill already exists before creating one.",
             ),
-        ]
+        ];
+        if crate::repo::read_only() {
+            tools.retain(|tool| !WRITE_TOOLS.contains(&tool.name.as_str()));
+        }
+        tools
     }
 
     async fn call_tool(&self, name: &str, args: &Value) -> Result<ToolReply, CallError> {
+        // A hidden write tool fails exactly like a tool the server never had,
+        // so clients degrade through their normal unknown-tool path instead of
+        // learning a second error shape.
+        if crate::repo::read_only() && WRITE_TOOLS.contains(&name) {
+            return Err(CallError::tool(format!("unknown tool: {name}")));
+        }
         match name {
             "skills_create_skill" => dispatch(operations::create_skill::execute(args)),
             "skills_get_skill" => dispatch(operations::get_skill::execute(args)),
